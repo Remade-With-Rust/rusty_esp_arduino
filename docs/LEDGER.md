@@ -44,3 +44,23 @@ Notes:
 - `cargo deny check` in the umbrella checkout warns `unmatched-source` for
   every patched sibling (the lock records a patched crate without its git
   source); in CI, where the siblings resolve from GitHub, the sources match.
+
+## M4 board half, the software part: the sketch firmware builds for the S3 (2026-09-02)
+
+`firmware/xiao-s3-sense-idf-sketch`: the README's `setup` / `loop_once`
+over `EspBoard` (`rusty_esp_image-esp::idf::IdfCamera`,
+`rusty_esp_audio-esp::idf::PdmIn`, `esp-idf-svc` Wi-Fi), Track A,
+`xtensa-esp32s3-espidf`, ESP-IDF v5.5.1, `espressif/esp32-camera ^2.0`,
+esp toolchain, `--release` (`opt-level = "s"`, fat LTO).
+
+| what | result |
+|---|---|
+| `cargo build --release` (dummy `JANUS_WIFI_*`, `CARGO_TARGET_DIR=C:/janus-f`) | **builds**; the bin, the facade and the two chip crates compiled last (the rest of the graph was warm from the first attempt, which failed on four missing `'static` lifetimes on the peripheral fields and nothing else) |
+| ELF | 1,604,132 B |
+| `espflash save-image --chip esp32s3` | **app image 1,092,080 B, 26.45 % of the 4,128,768 B app partition** (`PARTITION_TABLE_SINGLE_APP_LARGE`) |
+| `unsafe` in the firmware | none (`#![deny(unsafe_code)]`); the camera's and the RNG's fences stay in the chip crates |
+
+For scale, `rusty_esp_video`'s MJPEG-only firmware on the same board is
+1,073,152 B: the facade, the PDM path and the two UDP senders cost about
+19 KB of image. Nothing has been flashed; the board rows (frames at
+`/stream`, blocks at `JANUS_PCM_DEST`) wait for the board.

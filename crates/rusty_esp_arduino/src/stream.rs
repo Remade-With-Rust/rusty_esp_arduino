@@ -154,6 +154,10 @@ fn listen_inner(port: u16) -> Result<()> {
     let (thread_slot, thread_stats) = (Arc::clone(&slot), Arc::clone(&stats));
     thread::Builder::new()
         .name(format!("mjpeg-{port}"))
+        // ESP-IDF's default pthread stack is a few KB; the server parses
+        // request heads and writes frames from this thread. Harmless on a
+        // laptop.
+        .stack_size(24 * 1024)
         .spawn(move || {
             let mut scratch = vec![0u8; MAX_JPEG];
             let mut served = ServeStats::default();

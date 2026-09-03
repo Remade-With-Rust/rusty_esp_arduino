@@ -76,8 +76,10 @@ laptop board, the three stream outputs, and the tests that hold them: the
 plan's sketch runs on the laptop and every frame and block it pushes comes
 back through `rusty_esp_video-esp`'s own receivers, counted; the page and
 the stream are read back over TCP; ffmpeg decodes the stream. Counts are in
-the ledger. What waits for a board: the chip's `Board` (camera DMA, I2S/PDM,
-Wi-Fi join) and the second board file.
+the ledger. The board half's software is in too: `firmware/xiao-s3-sense-idf-sketch`
+is the same sketch over `EspBoard` and builds for the XIAO ESP32-S3 Sense
+(app image 1,092,080 B); `boards/` holds three board records. What waits for
+a board is the run.
 
 ## Layout
 
@@ -92,7 +94,7 @@ crates/rusty_esp_arduino   std, forbid(unsafe): the facade
   examples/cam_mic.rs      the sketch above
   tests/                   no_board, loopback (RTP + PCM back through the video package's receivers), http
 boards/                    one record per board: chip, memory, every peripheral's GPIO, with sources (schema in boards/README.md)
-firmware/                  the board sketches, when there is a board (own cargo projects)
+firmware/xiao-s3-sense-idf-sketch   the same sketch over EspBoard (camera, PDM mic, Wi-Fi); builds for the S3, not yet flashed
 docs/plans/                the plan; docs/LEDGER.md every number
 ```
 
