@@ -77,5 +77,11 @@ what the sketch serves:
 | `rff -i http://127.0.0.1:18080/stream -c:v copy -f mjpeg out.mjpeg` for 12 s | `ffprobe -f mjpeg -count_frames`: **181 frames, 320×240** |
 | `rff -i "rtp://0.0.0.0:5004?pt=26&timeout=3" -c:v copy -f mjpeg` while the sketch's `stream::rtp_to` sent for ~6 s | **98 frames, 320×240**, 98 packets written |
 
-rff's `rtp://@:port` form receives nothing on Windows (reported upstream, remade_ffmpeg_rs#12);
-use `0.0.0.0:port`.
+rff's documented `rtp://@:port` form received nothing on Windows at `e2c71cc`
+(reported as remade_ffmpeg_rs#12). The report's cause was wrong: not an IPv6
+bind but the empty host reaching `UdpSocket::bind` as `":5004"`, which Windows
+resolves to one of the machine's own interfaces rather than the wildcard.
+Fixed upstream in `de24a83` (PR #13), issue closed. Re-run on `ddc3355` with
+the documented spelling: `rff -i "rtp://@:5004?pt=26&timeout=3" -c:v copy -f mjpeg`
+while `stream::rtp_to` sent for ~5 s → **82 frames, 320×240**, 82 packets
+written. Either spelling works now.
