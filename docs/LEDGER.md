@@ -16,7 +16,7 @@ checkout (siblings patched to their local checkouts).
 | `tests/http.rs` — `stream::listen(0)`, `/` read back (200, links `/stream`), `/stream` read back until three JPEG starts (200, `multipart/x-mixed-replace`), server counters folded in | 1 pass, 2.0 s |
 | doctest (the README sketch, `no_run`) | 1 pass |
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
-| `cargo deny check` | see the note below |
+| `cargo deny check` | clean (`IJG` allowed for `rusty_jpeg`'s tables; the local-patch warning is the note below) |
 
 **External oracle, ffmpeg 8.1.2** (`examples/cam_mic`, `JANUS_HTTP_PORT=18080
 JANUS_RTP_DEST=127.0.0.1:5004`, colour bars at QVGA 15 fps):
