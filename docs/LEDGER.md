@@ -64,3 +64,18 @@ For scale, `rusty_esp_video`'s MJPEG-only firmware on the same board is
 1,073,152 B: the facade, the PDM path and the two UDP senders cost about
 19 KB of image. Nothing has been flashed; the board rows (frames at
 `/stream`, blocks at `JANUS_PCM_DEST`) wait for the board.
+
+## rusty_jpeg 0.4; rff reads the sketch (host, 2026-09-03)
+
+The laptop board's pattern camera now encodes with `rusty_jpeg` 0.4 (the
+same call, a crates.io bump); the eight tests pass unchanged. rff
+(remade_ffmpeg_rs `e2c71cc`, built locally) joined ffmpeg as the reader of
+what the sketch serves:
+
+| probe | result |
+|---|---|
+| `rff -i http://127.0.0.1:18080/stream -c:v copy -f mjpeg out.mjpeg` for 12 s | `ffprobe -f mjpeg -count_frames`: **181 frames, 320×240** |
+| `rff -i "rtp://0.0.0.0:5004?pt=26&timeout=3" -c:v copy -f mjpeg` while the sketch's `stream::rtp_to` sent for ~6 s | **98 frames, 320×240**, 98 packets written |
+
+rff's `rtp://@:port` form receives nothing on Windows (reported upstream, remade_ffmpeg_rs#12);
+use `0.0.0.0:port`.
