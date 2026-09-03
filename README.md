@@ -91,6 +91,7 @@ crates/rusty_esp_arduino   std, forbid(unsafe): the facade
   src/error.rs             last_error()
   examples/cam_mic.rs      the sketch above
   tests/                   no_board, loopback (RTP + PCM back through the video package's receivers), http
+boards/                    one record per board: chip, memory, every peripheral's GPIO, with sources (schema in boards/README.md)
 firmware/                  the board sketches, when there is a board (own cargo projects)
 docs/plans/                the plan; docs/LEDGER.md every number
 ```

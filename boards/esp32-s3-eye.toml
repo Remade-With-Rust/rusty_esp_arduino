@@ -1,0 +1,42 @@
+# Espressif ESP32-S3-EYE: the second board file the plan asks for (M4), a
+# camera plus an I2S digital microphone on one dev kit.
+schema = 1
+
+[board]
+name = "esp32-s3-eye"
+vendor = "Espressif"
+chip = "esp32s3"
+psram_mb = 8
+flash_mb = 8
+track = "idf"
+
+[camera]
+sensor = "ov2640"
+interface = "dvp"
+xclk_hz = 20_000_000
+pwdn = -1
+reset = -1
+xclk = 15
+sccb_sda = 4
+sccb_scl = 5
+d0 = 11
+d1 = 9
+d2 = 8
+d3 = 10
+d4 = 12
+d5 = 18
+d6 = 17
+d7 = 16
+vsync = 6
+href = 7
+pclk = 13
+
+[microphone]
+kind = "i2s"
+clk = 41
+data = 2
+ws = 42
+
+[sources]
+camera = "espressif/arduino-esp32, libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h, CAMERA_MODEL_ESP32S3_EYE; agrees with espressif/esp-bsp bsp/esp32_s3_eye/include/bsp/esp32_s3_eye.h BSP_CAMERA_*"
+microphone = "espressif/esp-bsp, bsp/esp32_s3_eye/include/bsp/esp32_s3_eye.h: BSP_I2S_SCLK GPIO41, BSP_I2S_LCLK GPIO42, BSP_I2S_DSIN GPIO2 (MCLK and DOUT not connected)"

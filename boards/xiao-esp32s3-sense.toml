@@ -1,0 +1,47 @@
+# Seeed Studio XIAO ESP32S3 Sense: the first Janus board (video, audio and
+# mesh firmwares already build for it).
+schema = 1
+
+[board]
+name = "xiao-esp32s3-sense"
+vendor = "Seeed Studio"
+chip = "esp32s3"
+psram_mb = 8
+flash_mb = 8
+track = "idf"
+
+[camera]
+sensor = "ov2640"
+interface = "dvp"
+xclk_hz = 20_000_000
+pwdn = -1
+reset = -1
+xclk = 10
+sccb_sda = 40
+sccb_scl = 39
+d0 = 15
+d1 = 17
+d2 = 18
+d3 = 16
+d4 = 14
+d5 = 12
+d6 = 11
+d7 = 48
+vsync = 38
+href = 47
+pclk = 13
+
+[microphone]
+kind = "pdm"
+clk = 42
+data = 41
+ws = -1
+
+[led]
+gpio = 21
+active = "low"
+
+[sources]
+camera = "espressif/arduino-esp32, libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h, CAMERA_MODEL_XIAO_ESP32S3 (Y2..Y9 = d0..d7, SIOD/SIOC = sccb_sda/sccb_scl); agrees with rusty_esp_image-esp::XIAO_ESP32S3_SENSE"
+microphone = "Seeed Studio XIAO ESP32S3 Sense wiki (PDM CLK GPIO42, DATA GPIO41); rusty_esp_audio firmware xiao-s3-sense-idf-pdm-udp uses the same pair"
+led = "Seeed Studio XIAO ESP32S3 schematic: user LED on GPIO21, active low"

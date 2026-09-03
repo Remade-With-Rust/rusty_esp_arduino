@@ -49,7 +49,8 @@ says which peripheral.
 | # | what | gate |
 |---|---|---|
 | **M4 host half** ✅ 2026-09-02 | prelude; `Board`; `HostBoard` (pattern / JPEG-dir camera, tone / WAV microphone, paced like a sensor); `stream::{listen, rtp_to, pcm_to, push_jpeg, push_pcm}`; `sketch::{run, run_for}` | the plan's sketch runs on the laptop; every frame and block comes back through `rusty_esp_video-esp`'s receivers, counted; the page and the stream read back over TCP; ffmpeg decodes `/stream` — ledger |
-| **M4 board half** ☐ | `firmware/xiao-s3-sense-idf-sketch`: an `EspBoard` over `rusty_esp_image-esp` (camera), `rusty_esp_audio-esp` (PDM), ESP-IDF Wi-Fi; the README's sketch, unchanged | the same tests' receivers on a laptop, the board sending; a second board file (Korvo-2 or S3-EYE) |
+| **M4 board files** ✅ 2026-09-02 | `boards/` schema v1 and three records — `xiao-esp32s3-sense`, `esp32-s3-eye` (the second board the plan asks for), `ai-thinker-esp32-cam` — pins from the vendors' published tables, cited per record | `tests/boards.rs`: every record parses, keeps the schema, stays inside the chip's GPIO range, claims no GPIO twice |
+| **M4 board half** ☐ | `firmware/xiao-s3-sense-idf-sketch`: an `EspBoard` over `rusty_esp_image-esp` (camera), `rusty_esp_audio-esp` (PDM), ESP-IDF Wi-Fi, reading its `boards/` record; the README's sketch, unchanged | the same tests' receivers on a laptop, the board sending |
 | **M5 hook** ☐ | `rusty_esp_dsp` PIE kernels reach a sketch only through the function packages — nothing to do here | — |
 
 ## 4. Decision log

@@ -15,6 +15,7 @@ checkout (siblings patched to their local checkouts).
 | `tests/loopback.rs` — the plan's sketch, 12 loops, colour bars + tone → `stream::rtp_to` + `stream::pcm_to` → `rusty_esp_video-esp::udp_net::{receive_rtp_jpeg, receive_raw}` on loopback | 1 pass: **12 / 12 frames** (320×240, every datagram sent was received, 0 lost, 0 dropped), **12 / 12 PCM blocks** of 640 B (20 ms at 16 kHz mono i16), 0 lost |
 | `tests/http.rs` — `stream::listen(0)`, `/` read back (200, links `/stream`), `/stream` read back until three JPEG starts (200, `multipart/x-mixed-replace`), server counters folded in | 1 pass, 2.0 s |
 | doctest (the README sketch, `no_run`) | 1 pass |
+| `tests/boards.rs` — the three `boards/` records parse, hold schema v1, stay inside the chip's GPIO range (ESP32 ≤ 39, S3 ≤ 48), claim no GPIO twice, cite a source per peripheral; the XIAO record matches the pins the Janus firmwares already use | 2 pass |
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | `cargo deny check` | clean (`IJG` allowed for `rusty_jpeg`'s tables; the local-patch warning is the note below) |
 

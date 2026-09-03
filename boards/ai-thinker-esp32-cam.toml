@@ -1,0 +1,40 @@
+# AI-Thinker ESP32-CAM: the classic ESP32 camera board, camera and flash
+# LED, no microphone. In the plan's board list; no Janus firmware yet.
+schema = 1
+
+[board]
+name = "ai-thinker-esp32-cam"
+vendor = "AI-Thinker"
+chip = "esp32"
+psram_mb = 4
+flash_mb = 4
+track = "idf"
+
+[camera]
+sensor = "ov2640"
+interface = "dvp"
+xclk_hz = 20_000_000
+pwdn = 32
+reset = -1
+xclk = 0
+sccb_sda = 26
+sccb_scl = 27
+d0 = 5
+d1 = 18
+d2 = 19
+d3 = 21
+d4 = 36
+d5 = 39
+d6 = 34
+d7 = 35
+vsync = 25
+href = 23
+pclk = 22
+
+[led]
+gpio = 4
+active = "high"
+
+[sources]
+camera = "espressif/arduino-esp32, libraries/ESP32/examples/Camera/CameraWebServer/camera_pins.h, CAMERA_MODEL_AI_THINKER (Y2..Y9 = d0..d7); agrees with rusty_esp_image-esp::AI_THINKER_ESP32_CAM"
+led = "the same table: LED_GPIO_NUM 4 (the flash LED, active high)"

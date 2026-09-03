@@ -27,6 +27,12 @@ rusty_esp_audio-core = { workspace = true, features = ["std"] }
 rusty_esp_image-core = { workspace = true, features = ["std"], optional = true }
 rusty_jpeg = { version = "0.3", default-features = false, features = ["std"], optional = true }
 
+[dev-dependencies]
+# The board records under boards/ are TOML; the test that holds them to the
+# schema parses them here and nowhere else.
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
 [[example]]
 name = "cam_mic"
 required-features = ["host"]
