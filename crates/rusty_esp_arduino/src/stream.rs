@@ -2,8 +2,9 @@
 //! a player, raw PCM over UDP to a receiver — all of it `rusty_esp_video-esp`,
 //! all of it the same code on the laptop and on the chip.
 //!
-//! `listen(port)` serves `/` and `/stream`; `push_jpeg` hands the latest
-//! frame to every open stream. `rtp_to(dest)` and `pcm_to(dest)` add the two
+//! `listen_gated(port)` serves `/` and `/stream` to whoever has the device's
+//! page token (the URL printed at boot); `listen(port)` serves them to
+//! anyone, by name. `push_jpeg` hands the latest frame to every open stream. `rtp_to(dest)` and `pcm_to(dest)` add the two
 //! UDP senders; `push_jpeg` and `push_pcm` then also send. Nothing is
 //! configured by default: a sketch that never calls `listen` opens no socket.
 
@@ -116,6 +117,8 @@ struct Server {
     addr: SocketAddr,
     slot: Arc<Slot>,
     stats: Arc<Mutex<HttpStats>>,
+    /// The viewing token the server requires, when gated.
+    token: Option<String>,
 }
 
 struct State {
@@ -139,15 +142,60 @@ fn state() -> std::sync::MutexGuard<'static, State> {
 }
 
 /// Serve `/` and `/stream` on every interface at `port` (0 picks one; see
-/// [`listen_addr`]). One server per program; calling again replaces the
-/// address frames go to but the first server keeps running. `false` (and
-/// [`crate::last_error`]) when the port cannot be bound.
+/// [`listen_addr`]) **to anyone who finds the address** — the open page, by
+/// name; a sketch that wants the token on it calls [`listen_gated`]. One
+/// server per program; calling again replaces the address frames go to but
+/// the first server keeps running. `false` (and [`crate::last_error`]) when
+/// the port cannot be bound.
 pub fn listen(port: u16) -> bool {
-    error::ok(listen_inner(port))
+    error::ok(listen_inner(port, None))
 }
 
-fn listen_inner(port: u16) -> Result<()> {
-    let server = MjpegHttpServer::bind(("0.0.0.0", port))?;
+/// Serve `/` and `/stream` at `port` to whoever has the device's page token:
+/// `?t=<token>` on the URL (the page then sets it as a cookie for its own
+/// `/stream`), `403` otherwise. The token is the identity's
+/// ([`crate::identity::page_token`]), so `identity::begin` comes first;
+/// without it this is `false` and [`crate::last_error`] says so. See
+/// [`page_url`] for the line to print.
+pub fn listen_gated(port: u16) -> bool {
+    error::ok(
+        crate::identity::page_token()
+            .ok_or(Error::Missing(
+                "the page token: identity::begin comes before listen_gated",
+            ))
+            .and_then(|token| listen_inner(port, Some(token))),
+    )
+}
+
+/// The token the running server requires, if it is gated.
+#[must_use]
+pub fn token() -> Option<String> {
+    state().server.as_ref().and_then(|s| s.token.clone())
+}
+
+/// The URL to open at `host` (an address or a name): `http://host/?t=…`
+/// when gated, `http://host/` when open, with the port when it is not 80.
+/// `None` before [`listen`] or [`listen_gated`].
+#[must_use]
+pub fn page_url(host: &str) -> Option<String> {
+    let st = state();
+    let server = st.server.as_ref()?;
+    let port = if server.addr.port() == 80 {
+        String::new()
+    } else {
+        format!(":{}", server.addr.port())
+    };
+    Some(match &server.token {
+        Some(t) => format!("http://{host}{port}/?t={t}"),
+        None => format!("http://{host}{port}/"),
+    })
+}
+
+fn listen_inner(port: u16, token: Option<String>) -> Result<()> {
+    let mut server = MjpegHttpServer::bind(("0.0.0.0", port))?;
+    if let Some(t) = &token {
+        server = server.gated(t.clone());
+    }
     let addr = server.local_addr()?;
     let slot = Arc::new(Slot::default());
     let stats = Arc::new(Mutex::new(HttpStats::default()));
@@ -177,7 +225,12 @@ fn listen_inner(port: u16) -> Result<()> {
                 };
             }
         })?;
-    state().server = Some(Server { addr, slot, stats });
+    state().server = Some(Server {
+        addr,
+        slot,
+        stats,
+        token,
+    });
     Ok(())
 }
 

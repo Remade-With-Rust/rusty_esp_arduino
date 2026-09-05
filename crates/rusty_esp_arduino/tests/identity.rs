@@ -63,6 +63,11 @@ fn the_did_is_minted_once_and_the_refusals_say_why() {
     assert!(identity::begin(None), "{:?}", last_error());
     let first = identity::did().expect("a did");
     assert!(first.starts_with("did:mata:"), "{first}");
+    let token = identity::page_token().expect("a page token beside the key");
+    assert!(
+        (16..=23).contains(&token.len()) && token.bytes().all(|b| b.is_ascii_alphanumeric()),
+        "16 random bytes, base58: {token}"
+    );
     assert!(identity::maker().is_none());
     assert!(identity::begun());
 
@@ -86,6 +91,15 @@ fn the_did_is_minted_once_and_the_refusals_say_why() {
         dir.join("mid.devkey").is_file(),
         "the key sits in the store under mid's name"
     );
+    assert_eq!(
+        identity::page_token().as_deref(),
+        Some(token.as_str()),
+        "the page token is as stable as the DID: same store, same token"
+    );
+    assert!(
+        dir.join("page.token").is_file(),
+        "…and it sits beside the key, so what keeps the key keeps it"
+    );
 
     // a maker that is not a did:mata
     identity::end();
@@ -105,6 +119,11 @@ fn the_did_is_minted_once_and_the_refusals_say_why() {
     board::install(HostBoard::new().unpaced().with_store(&other));
     assert!(identity::begin(None));
     assert_ne!(identity::did().as_deref(), Some(first.as_str()));
+    assert_ne!(
+        identity::page_token().as_deref(),
+        Some(token.as_str()),
+        "another device, another token"
+    );
 
     identity::end();
     board::uninstall();

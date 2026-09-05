@@ -18,6 +18,36 @@ use crate::error::{Error, Result, record};
 /// The label the device key is generated under.
 pub const DEVICE_ID: &str = "janus";
 
+/// The store key of the page's viewing token, beside the device key: minted
+/// once from the board's entropy, kept in the same store (the identity
+/// partition on a chip), so it survives a re-provision and a reflash as the
+/// DID does.
+pub const PAGE_TOKEN_KEY: &str = "page.token";
+
+/// Random bytes in the page token.
+const PAGE_TOKEN_BYTES: usize = 16;
+
+/// Load the page token from `kv`, or mint it into `kv` from `rng`.
+fn load_or_mint_token(kv: &mut DynKv, rng: &mut DynRng) -> Result<String> {
+    let io = |e: rusty_esp_core::Error| Error::Io(format!("page token: {e:?}"));
+    let mut raw = [0u8; PAGE_TOKEN_BYTES];
+    let have = match kv.get(PAGE_TOKEN_KEY, &mut raw) {
+        Ok(n) => n,
+        // a value of another length is not this token: mint over it
+        Err(rusty_esp_core::Error::BufferTooSmall { .. }) => None,
+        Err(e) => return Err(io(e)),
+    };
+    if have != Some(PAGE_TOKEN_BYTES) {
+        rng.fill(&mut raw).map_err(io)?;
+        kv.put(PAGE_TOKEN_KEY, &raw).map_err(io)?;
+    }
+    let mut out = [0u8; 2 * PAGE_TOKEN_BYTES];
+    let n = bs58::encode(&raw)
+        .onto(&mut out[..])
+        .map_err(|_| Error::Io("page token: base58".into()))?;
+    String::from_utf8(out[..n].to_vec()).map_err(|_| Error::Io("page token: base58".into()))
+}
+
 /// A boxed [`Kv`] as a sized one, for the seams that take `&mut impl Kv`.
 pub(crate) struct DynKv(pub(crate) Box<dyn Kv + Send>);
 
@@ -47,6 +77,8 @@ impl Rng for DynRng {
 struct State {
     did: String,
     maker: Option<String>,
+    /// The page's viewing token, base58.
+    page_token: String,
     /// The store and entropy `begin` took from the board, until the mesh
     /// takes them (the node owns the store; the key in it is the same).
     #[cfg_attr(not(feature = "mesh"), allow(dead_code))]
@@ -76,9 +108,11 @@ fn try_begin(maker: Option<&str>) -> Result<String> {
         .write(&mut buf)
         .map_err(|e| Error::Io(format!("did: {e:?}")))?
         .to_owned();
+    let page_token = load_or_mint_token(&mut kv, &mut rng)?;
     *IDENTITY.lock().unwrap_or_else(PoisonError::into_inner) = Some(State {
         did: did.clone(),
         maker: maker.map(str::to_owned),
+        page_token,
         store: Some((kv.0, rng.0)),
     });
     Ok(did)
@@ -106,6 +140,18 @@ pub fn did() -> Option<String> {
         .unwrap_or_else(PoisonError::into_inner)
         .as_ref()
         .map(|s| s.did.clone())
+}
+
+/// The page's viewing token once `begin` succeeded: what
+/// [`crate::stream::listen_gated`] requires on `/` and `/stream`. Minted
+/// once, kept beside the device key, the same on every boot.
+#[must_use]
+pub fn page_token() -> Option<String> {
+    IDENTITY
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .map(|s| s.page_token.clone())
 }
 
 /// The maker DID `begin` was given, if any.
