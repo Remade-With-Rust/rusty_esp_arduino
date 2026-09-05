@@ -85,3 +85,22 @@ Fixed upstream in `de24a83` (PR #13), issue closed. Re-run on `ddc3355` with
 the documented spelling: `rff -i "rtp://@:5004?pt=26&timeout=3" -c:v copy -f mjpeg`
 while `stream::rtp_to` sent for ~5 s → **82 frames, 320×240**, 82 packets
 written. Either spelling works now.
+
+## `identity::begin` and the mesh verbs (host, 2026-09-04)
+
+Laptop, Windows 11, stable Rust, `CARGO_TARGET_DIR=C:/janus-a`, siblings
+patched to their checkouts (mid-core, iroh-host and iroh-core joined the
+patch table).
+
+| gate | result |
+|---|---|
+| `tests/identity.rs` | no board → `NoBoard`; a board without a store → `Missing`; the laptop board mints a `did:mata:…`; `end` and a new install on the **same store → the same DID**, now with a maker; `did:web:…` as maker refused with the message naming `did:mata`; another store → another DID; the key file is `mid.devkey` |
+| `tests/mesh.rs` (`--features mesh`) | `mesh::begin` before identity refused by name (`NotBegun("identity")`); after `identity::begin`, the node comes up with the device's DID and a ticket; `begin` twice refused; the sketch pushes 60 frames at 40 ms from a thread while `rusty_esp_iroh-host::Client` subscribes through the ticket: **8 packets asked for, 8 received, 0 lost, each a pushed frame byte for byte, the subscriber's sequence 0..8**; `service()` counts ≥ 1 subscriber and ≥ 8 frames; **2.6 s** |
+| `cargo test -p rusty_esp_arduino` (default features) | 7 suites, 11 tests, 0 failed |
+| `cargo clippy --all-targets -- -D warnings` with and without `mesh` | clean |
+| `cargo deny check` | clean, with `rusty_esp_mid`, `rusty_esp_iroh`, `mid` and n0's `rustls-rustcrypto` added to the allowed git sources |
+
+Not run: a chip. The generated firmware's `EspBoard` (from `espino make`)
+implements `take_kv` over `EspNvsKv::open_unchecked` and `take_rng` over
+`EspRng::after_radio_start`; its first DID line on a serial port is the
+board's row.

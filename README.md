@@ -81,6 +81,21 @@ is the same sketch over `EspBoard` and builds for the XIAO ESP32-S3 Sense
 (app image 1,092,080 B); `boards/` holds three board records. What waits for
 a board is the run.
 
+**`identity::begin` and `mesh::{begin, push_media, push_media_pcm,
+service}` (2026-09-04)** — the two verbs Make for MATA's composer needed.
+`identity::begin(maker)` mints or loads the device's `did:mata` from the
+board's store (`Board::take_kv` / `take_rng`, new seams with defaults; the
+laptop board keeps a file per key and uses the OS RNG), under mid's own
+key name, so the DID is the same on every boot. `mesh::begin(config)` —
+behind the `mesh` feature, since it brings iroh — runs `rusty_esp_iroh`'s
+node on its own thread with that identity, a latest-frame media factory
+and the capability manifest the config declares; `push_media` offers
+frames, `ticket()` is what a home computer scans. Thin by law: adoption,
+the ALPNs, OTA and the sidecar contract stay the iroh package's. Gates in
+the ledger: the same store gives the same DID; the iroh package's own
+client subscribes through the ticket and receives the pushed frames in
+order, byte for byte, under the device's DID.
+
 ## Layout
 
 ```text
@@ -91,8 +106,10 @@ crates/rusty_esp_arduino   std, forbid(unsafe): the facade
   src/host.rs              HostBoard: pattern or JPEG-directory camera, tone or WAV microphone
   src/sketch.rs            run / run_for / delay / millis
   src/error.rs             last_error()
+  src/identity.rs          identity::begin — the device DID from the board's store (rusty_esp_mid)
+  src/mesh.rs              mesh::begin / push_media / service — rusty_esp_iroh's node behind the facade (feature `mesh`)
   examples/cam_mic.rs      the sketch above
-  tests/                   no_board, loopback (RTP + PCM back through the video package's receivers), http
+  tests/                   no_board, loopback (RTP + PCM back through the video package's receivers), http, identity, mesh
 boards/                    one record per board: chip, memory, every peripheral's GPIO, with sources (schema in boards/README.md)
 firmware/xiao-s3-sense-idf-sketch   the same sketch over EspBoard (camera, PDM mic, Wi-Fi); builds for the S3, not yet flashed
 docs/plans/                the plan; docs/LEDGER.md every number
@@ -102,6 +119,7 @@ docs/plans/                the plan; docs/LEDGER.md every number
 
 ```sh
 cargo test --workspace
+cargo test --features mesh --test mesh     # the node on the laptop; brings iroh
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check
 ```

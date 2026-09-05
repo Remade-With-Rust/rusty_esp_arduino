@@ -52,11 +52,15 @@ says which peripheral.
 | **M4 board files** ✅ 2026-09-02 | `boards/` schema v1 and three records — `xiao-esp32s3-sense`, `esp32-s3-eye` (the second board the plan asks for), `ai-thinker-esp32-cam` — pins from the vendors' published tables, cited per record | `tests/boards.rs`: every record parses, keeps the schema, stays inside the chip's GPIO range, claims no GPIO twice |
 | **M4 board half** ◐ | `firmware/xiao-s3-sense-idf-sketch` ✅ 2026-09-02 (software): `EspBoard` over `rusty_esp_image-esp` (camera), `rusty_esp_audio-esp` (PDM), ESP-IDF Wi-Fi; the README's sketch, unchanged; builds for the S3, app image 1,092,080 B (ledger) | ☐ on the board: the same tests' receivers on a laptop, the board sending; the record in `boards/` read by the firmware rather than the image crate's constant |
 | **M5 hook** ☐ | `rusty_esp_dsp` PIE kernels reach a sketch only through the function packages — nothing to do here | — |
+| **Make for MATA verbs** ✅ 2026-09-04 | `identity::begin(maker)` over new `Board::take_kv` / `take_rng` seams (defaulted; `HostBoard::with_store`, `FileKv`, `HostRng`); `mesh::{begin, push_media, push_media_pcm, service, ticket, did, port, end}` behind feature `mesh` over `rusty_esp_iroh-host`'s node with a two-slot latest-frame `MediaSource` per subscriber; `mesh::Config` builds the capability manifest | `tests/identity.rs` (refusals by name; minted; the same store → the same DID; another store → another device) and `tests/mesh.rs` (the iroh client subscribes through the ticket: 8 packets in order, 0 lost, byte for byte) |
 
 ## 4. Decision log
 
 | Date | Decision |
 |---|---|
+| 2026-09-04 | The device's keys come from the board: `Board::take_kv` and `take_rng` are seams with `None` defaults, so a board without a store refuses `identity::begin` by name rather than minting a key it cannot keep. The laptop's store is a directory of files in the temp dir (plaintext, development) and says so. |
+| 2026-09-04 | `identity` stores the key under mid's own name (`mid.devkey`) so the mesh node — which reloads the key through `NodeIdentity::load_or_create` — presents the identity the sketch minted, not a second one; `mesh::begin` takes the store from `identity` and refuses without it. |
+| 2026-09-04 | `mesh` is a cargo feature, off by default: it brings iroh into every consumer otherwise, and a sketch that streams to a browser does not need a node. The composer turns it on for the cells that do. |
 | 2026-09-02 | One std crate, no `-core`/`-esp` split: the facade is the Track A surface and has no bare-metal half; a chip's `Board` lives in its firmware project (or a later `-esp` crate if two boards share one). |
 | 2026-09-02 | `HostBoard` behind a default-on `host` feature so a firmware turns it (and `rusty_jpeg`, `rusty_esp_image-core`) off. |
 | 2026-09-02 | The MJPEG server thread holds the latest frame in a slot and each `/stream` waits for a newer one: a slow client drops frames rather than delaying the sketch, which is what a board must do too. |
