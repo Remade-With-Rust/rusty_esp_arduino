@@ -9,3 +9,4 @@ pub use crate::identity;
 pub use crate::mesh;
 pub use crate::sketch::{self, delay, millis};
 pub use crate::{Error, cam, last_error, mic, stream, wifi};
+pub use crate::{host, provision};

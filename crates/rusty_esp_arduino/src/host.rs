@@ -10,6 +10,7 @@ use std::fmt;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use rusty_esp_audio_core::codec::wav::{WavCodec, WavHeader};
@@ -59,6 +60,41 @@ pub struct HostBoard {
     mic: Option<MicRun>,
     store: PathBuf,
     store_taken: bool,
+    provisioning: Option<String>,
+    settings: Option<(String, String)>,
+}
+
+/// What a "phone" wrote to the laptop board: the credential queue a test
+/// fills with [`inject_credentials`]; `provision_poll` drains it.
+static INJECTED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+static LAST_PROVISIONING: Mutex<Option<String>> = Mutex::new(None);
+static LAST_SETTINGS: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+/// Act as the phone: hand the installed laptop board these credentials; the
+/// sketch's next `provision::poll` returns them.
+pub fn inject_credentials(ssid: &str, psk: &str) {
+    INJECTED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((ssid.to_owned(), psk.to_owned()));
+}
+
+/// The name the laptop board last advertised under, for tests.
+#[must_use]
+pub fn provisioning_name() -> Option<String> {
+    LAST_PROVISIONING
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// The settings the laptop board last stored, for tests.
+#[must_use]
+pub fn stored_settings() -> Option<(String, String)> {
+    LAST_SETTINGS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
 }
 
 impl fmt::Debug for HostBoard {
@@ -97,6 +133,8 @@ impl HostBoard {
             mic: None,
             store: default_store(),
             store_taken: false,
+            provisioning: None,
+            settings: None,
         }
     }
 
@@ -503,6 +541,39 @@ impl Board for HostBoard {
 
     fn take_rng(&mut self) -> Option<Box<dyn Rng + Send>> {
         Some(Box::new(HostRng))
+    }
+
+    fn provision_begin(&mut self, name: &str) -> Result<()> {
+        self.provisioning = Some(name.to_owned());
+        *LAST_PROVISIONING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(name.to_owned());
+        Ok(())
+    }
+
+    fn provision_poll(&mut self) -> Result<Option<(String, String)>> {
+        if self.provisioning.is_none() {
+            return Ok(None);
+        }
+        let mut q = INJECTED.lock().unwrap_or_else(PoisonError::into_inner);
+        if q.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(q.remove(0)))
+        }
+    }
+
+    fn provision_report(&mut self, joined: bool) -> Result<()> {
+        if joined {
+            self.provisioning = None;
+        }
+        Ok(())
+    }
+
+    fn store_settings(&mut self, ssid: &str, psk: &str) -> Result<()> {
+        self.settings = Some((ssid.to_owned(), psk.to_owned()));
+        *LAST_SETTINGS.lock().unwrap_or_else(PoisonError::into_inner) = self.settings.clone();
+        Ok(())
     }
 }
 

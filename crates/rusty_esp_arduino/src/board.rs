@@ -78,6 +78,31 @@ pub trait Board: Send {
     fn take_rng(&mut self) -> Option<Box<dyn Rng + Send>> {
         None
     }
+
+    /// Start advertising the Janus provisioning service as `name` (BLE on a
+    /// chip); a phone writes the network to join. A board without a radio
+    /// for it answers `Err(Error::Missing(..))`, and `provision::begin` says
+    /// so.
+    fn provision_begin(&mut self, _name: &str) -> Result<()> {
+        Err(Error::Missing("BLE provisioning on this board"))
+    }
+
+    /// The `(ssid, psk)` a phone wrote since the last call, if any.
+    fn provision_poll(&mut self) -> Result<Option<(String, String)>> {
+        Ok(None)
+    }
+
+    /// Tell the phone how the join went; a board without provisioning
+    /// ignores it.
+    fn provision_report(&mut self, _joined: bool) -> Result<()> {
+        Ok(())
+    }
+
+    /// Keep the network in the owner's settings (the `nvs` partition on a
+    /// chip) so the next boot joins without a phone.
+    fn store_settings(&mut self, _ssid: &str, _psk: &str) -> Result<()> {
+        Err(Error::Missing("a settings store on this board"))
+    }
 }
 
 static BOARD: Mutex<Option<Box<dyn Board>>> = Mutex::new(None);

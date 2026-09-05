@@ -50,6 +50,7 @@ pub mod identity;
 pub mod mesh;
 pub mod mic;
 pub mod prelude;
+pub mod provision;
 pub mod sketch;
 pub mod stream;
 pub mod wifi;
