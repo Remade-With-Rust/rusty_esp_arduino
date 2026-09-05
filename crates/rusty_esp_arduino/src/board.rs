@@ -103,6 +103,13 @@ pub trait Board: Send {
     fn store_settings(&mut self, _ssid: &str, _psk: &str) -> Result<()> {
         Err(Error::Missing("a settings store on this board"))
     }
+
+    /// Restart the board. On a chip this never returns; a board that cannot
+    /// restart itself answers `Err(Error::Missing(..))` and the sketch
+    /// carries on.
+    fn restart(&mut self) -> Result<()> {
+        Err(Error::Missing("a way to restart this board"))
+    }
 }
 
 static BOARD: Mutex<Option<Box<dyn Board>>> = Mutex::new(None);

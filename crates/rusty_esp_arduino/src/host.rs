@@ -10,6 +10,7 @@ use std::fmt;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -86,6 +87,15 @@ pub fn provisioning_name() -> Option<String> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone()
+}
+
+/// How many times the sketch asked the laptop board to restart.
+static RESTARTS: AtomicUsize = AtomicUsize::new(0);
+
+/// How many restarts the laptop board was asked for, for tests.
+#[must_use]
+pub fn restarts() -> usize {
+    RESTARTS.load(Ordering::Relaxed)
 }
 
 /// The settings the laptop board last stored, for tests.
@@ -567,6 +577,13 @@ impl Board for HostBoard {
         if joined {
             self.provisioning = None;
         }
+        Ok(())
+    }
+
+    /// The laptop cannot restart itself and must not try; it records the
+    /// request so a test can see the sketch asked.
+    fn restart(&mut self) -> Result<()> {
+        RESTARTS.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 

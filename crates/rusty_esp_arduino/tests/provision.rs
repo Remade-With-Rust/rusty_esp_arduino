@@ -37,6 +37,12 @@ fn a_phone_writes_credentials_and_the_sketch_joins_and_keeps_them() {
         host::stored_settings(),
         Some(("Pixel_3333".to_owned(), "correct horse battery".to_owned()))
     );
+
+    // …and then the sketch restarts, so the device comes back reading the
+    // network from the owner's settings with no provisioning radio running
+    assert_eq!(host::restarts(), 0);
+    assert!(sketch::restart(), "{:?}", last_error());
+    assert_eq!(host::restarts(), 1);
     board::uninstall();
 
     // and without a board every verb says so (in the same test: the board is a
@@ -48,6 +54,7 @@ fn a_phone_writes_credentials_and_the_sketch_joins_and_keeps_them() {
         ssid: "a".into(),
         psk: String::new()
     }));
+    assert!(!sketch::restart());
     assert!(
         matches!(last_error(), Some(Error::NoBoard)),
         "{:?}",
