@@ -29,6 +29,13 @@ pub const MTU: usize = 1400;
 pub const MAX_JPEG: usize = 512 * 1024;
 /// The RTP SSRC the sender uses; one sender per program.
 pub const SSRC: u32 = 0x4A41_4E55; // "JANU"
+/// How long an open `/stream` waits for a frame before the connection is
+/// given up. The server serves one connection at a time, and a viewer that
+/// arrived while the camera had nothing (it failed to probe, say) would
+/// otherwise hold that one connection forever: the stream only notices a
+/// gone client when it next pushes a frame, and no frame ever comes. Seen
+/// on the board — every request after such a viewer queued unanswered.
+pub const STREAM_STALL: Duration = Duration::from_secs(5);
 
 /// What the HTTP server has served.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -87,11 +94,16 @@ impl PacketSource for SlotSource {
             .frame
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let started = std::time::Instant::now();
         while guard.0 == self.last || guard.1.is_none() {
+            if started.elapsed() >= STREAM_STALL {
+                // ends this connection; the server accepts the next
+                return Err(CoreError::Timeout);
+            }
             guard = self
                 .slot
                 .fresh
-                .wait_timeout(guard, Duration::from_secs(1))
+                .wait_timeout(guard, Duration::from_millis(250))
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
