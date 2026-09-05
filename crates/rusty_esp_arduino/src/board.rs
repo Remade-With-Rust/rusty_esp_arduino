@@ -9,6 +9,7 @@
 use std::net::IpAddr;
 use std::sync::{Mutex, PoisonError};
 
+use rusty_esp_core::hal::{Kv, Rng};
 use rusty_esp_core::pcm::PcmFormat;
 use rusty_esp_core::time::Micros;
 
@@ -65,6 +66,18 @@ pub trait Board: Send {
     fn mic_read(&mut self) -> Result<Option<Pcm>>;
     /// Milliseconds since the board started.
     fn millis(&self) -> u64;
+
+    /// The board's persistent store — NVS on a chip, a directory on the
+    /// host — for the device's keys and its adoption. Taken once; `None`
+    /// when the board has none, and `identity::begin` says so.
+    fn take_kv(&mut self) -> Option<Box<dyn Kv + Send>> {
+        None
+    }
+
+    /// The board's entropy — the chip's TRNG, the OS on the host. Taken once.
+    fn take_rng(&mut self) -> Option<Box<dyn Rng + Send>> {
+        None
+    }
 }
 
 static BOARD: Mutex<Option<Box<dyn Board>>> = Mutex::new(None);

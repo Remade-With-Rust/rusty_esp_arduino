@@ -42,4 +42,8 @@ allow-git = [
   "https://github.com/Remade-With-Rust/rusty_esp_image",
   "https://github.com/Remade-With-Rust/rusty_esp_video",
   "https://github.com/Remade-With-Rust/rusty_esp_audio",
+  "https://github.com/Remade-With-Rust/rusty_esp_mid",
+  "https://github.com/Remade-With-Rust/rusty_esp_iroh",
+  "https://github.com/Remade-With-Rust/mid",
+  "https://github.com/n0-computer/rustls-rustcrypto",
 ]

@@ -45,6 +45,9 @@ pub mod cam;
 pub mod error;
 #[cfg(feature = "host")]
 pub mod host;
+pub mod identity;
+#[cfg(feature = "mesh")]
+pub mod mesh;
 pub mod mic;
 pub mod prelude;
 pub mod sketch;

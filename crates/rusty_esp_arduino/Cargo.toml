@@ -17,17 +17,27 @@ categories = ["embedded", "hardware-support", "multimedia"]
 default = ["host"]
 # The laptop board: a test-pattern or JPEG-directory camera, a tone or WAV
 # microphone, the same stream code the chip runs. Off in a firmware.
-host = ["dep:rusty_esp_image-core", "dep:rusty_jpeg"]
+host = ["dep:rusty_esp_image-core", "dep:rusty_jpeg", "dep:rand"]
+# The mesh: `rusty_esp_iroh`'s node behind `mesh::begin`, `push_media` and
+# `service`, on the laptop and on ESP-IDF alike. Off by default: it brings
+# iroh, and a sketch that only streams to a browser does not need it.
+mesh = ["dep:rusty_esp_iroh-host", "dep:rusty_esp_iroh-core", "dep:tokio"]
 
 [dependencies]
 rusty_esp_core = { workspace = true, features = ["std"] }
 rusty_esp_video-core = { workspace = true, features = ["std"] }
 rusty_esp_video-esp = { workspace = true, features = ["std"] }
 rusty_esp_audio-core = { workspace = true, features = ["std"] }
+rusty_esp_mid-core = { workspace = true, features = ["std"] }
+rusty_esp_iroh-core = { workspace = true, features = ["std"], optional = true }
+rusty_esp_iroh-host = { workspace = true, optional = true }
+tokio = { version = "1", features = ["rt", "time"], optional = true }
+rand = { version = "0.9", optional = true }
 rusty_esp_image-core = { workspace = true, features = ["std"], optional = true }
 rusty_jpeg = { version = "0.4", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 # The board records under boards/ are TOML; the test that holds them to the
 # schema parses them here and nowhere else.
 serde = { version = "1", features = ["derive"] }
@@ -36,6 +46,10 @@ toml = "0.8"
 [[example]]
 name = "cam_mic"
 required-features = ["host"]
+
+[[test]]
+name = "mesh"
+required-features = ["mesh"]
 
 [lints]
 workspace = true

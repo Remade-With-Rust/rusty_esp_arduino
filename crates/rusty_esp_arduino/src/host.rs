@@ -7,13 +7,16 @@
 //! "joins" instantly: the laptop is already on its network.
 
 use std::fmt;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rusty_esp_audio_core::codec::wav::{WavCodec, WavHeader};
 use rusty_esp_core::error::Error as CoreError;
+use rusty_esp_core::error::Result as CoreResult;
 use rusty_esp_core::frame::{Geometry, PixelFormat};
+use rusty_esp_core::hal::{Kv, Rng, check_key};
 use rusty_esp_core::pcm::{PcmFormat, SampleFormat};
 use rusty_esp_core::time::Micros;
 use rusty_esp_image_core::source::{ImageSource, TestPattern};
@@ -54,6 +57,8 @@ pub struct HostBoard {
     ssid: Option<String>,
     cam: Option<CamRun>,
     mic: Option<MicRun>,
+    store: PathBuf,
+    store_taken: bool,
 }
 
 impl fmt::Debug for HostBoard {
@@ -90,6 +95,8 @@ impl HostBoard {
             ssid: None,
             cam: None,
             mic: None,
+            store: default_store(),
+            store_taken: false,
         }
     }
 
@@ -104,7 +111,19 @@ impl HostBoard {
         if let Some(wav) = std::env::var_os("JANUS_WAV") {
             board = board.with_microphone(Microphone::Wav(PathBuf::from(wav)));
         }
+        if let Some(dir) = std::env::var_os("JANUS_KV_DIR") {
+            board = board.with_store(PathBuf::from(dir));
+        }
         board
+    }
+
+    /// Where the device's keys live on the laptop (`JANUS_KV_DIR`, else a
+    /// `janus-host-kv` directory in the temp dir). Plaintext; the directory
+    /// is the host's stand-in for NVS, and a development one.
+    #[must_use]
+    pub fn with_store(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.store = dir.into();
+        self
     }
 
     /// Use another frame source.
@@ -471,6 +490,20 @@ impl Board for HostBoard {
     fn millis(&self) -> u64 {
         self.started.elapsed().as_millis() as u64
     }
+
+    fn take_kv(&mut self) -> Option<Box<dyn Kv + Send>> {
+        if self.store_taken {
+            return None;
+        }
+        self.store_taken = true;
+        FileKv::open(&self.store)
+            .ok()
+            .map(|kv| Box::new(kv) as Box<dyn Kv + Send>)
+    }
+
+    fn take_rng(&mut self) -> Option<Box<dyn Rng + Send>> {
+        Some(Box::new(HostRng))
+    }
 }
 
 #[cfg(test)]
@@ -544,5 +577,75 @@ mod tests {
         assert_eq!(&block.bytes[..200], &data[..], "then it wraps");
         assert_eq!(&block.bytes[200..400], &data[..]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+fn default_store() -> PathBuf {
+    std::env::temp_dir().join("janus-host-kv")
+}
+
+/// A [`Kv`] over a directory: one file per key, the value its bytes. The
+/// laptop's stand-in for NVS — nothing here is encrypted, which is why the
+/// default directory is a temp one and a firmware never uses this type.
+#[derive(Debug, Clone)]
+pub struct FileKv {
+    dir: PathBuf,
+}
+
+impl FileKv {
+    /// Open (creating) `dir`.
+    pub fn open(dir: &Path) -> io::Result<Self> {
+        std::fs::create_dir_all(dir)?;
+        Ok(FileKv {
+            dir: dir.to_path_buf(),
+        })
+    }
+
+    fn path(&self, key: &str) -> PathBuf {
+        self.dir.join(key)
+    }
+}
+
+impl Kv for FileKv {
+    fn get(&self, key: &str, out: &mut [u8]) -> CoreResult<Option<usize>> {
+        check_key(key)?;
+        match std::fs::read(self.path(key)) {
+            Ok(value) => {
+                if out.len() < value.len() {
+                    return Err(CoreError::BufferTooSmall {
+                        needed: value.len(),
+                    });
+                }
+                out[..value.len()].copy_from_slice(&value);
+                Ok(Some(value.len()))
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(CoreError::Hardware),
+        }
+    }
+
+    fn put(&mut self, key: &str, value: &[u8]) -> CoreResult<()> {
+        check_key(key)?;
+        std::fs::write(self.path(key), value).map_err(|_| CoreError::Hardware)
+    }
+
+    fn remove(&mut self, key: &str) -> CoreResult<bool> {
+        check_key(key)?;
+        match std::fs::remove_file(self.path(key)) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(CoreError::Hardware),
+        }
+    }
+}
+
+/// The operating system's random source as the family's [`Rng`] seam.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HostRng;
+
+impl Rng for HostRng {
+    fn fill(&mut self, buf: &mut [u8]) -> CoreResult<()> {
+        rand::RngCore::fill_bytes(&mut rand::rng(), buf);
+        Ok(())
     }
 }

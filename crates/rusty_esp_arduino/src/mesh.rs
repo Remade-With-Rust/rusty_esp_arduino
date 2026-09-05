@@ -1,0 +1,434 @@
+//! The mesh behind the facade: `rusty_esp_iroh`'s node in a background
+//! thread, fed by `push_media` — the device as a MATA node, in the sketch's
+//! three verbs. Thin by law: the node, its ALPNs, adoption, the sidecar
+//! contract and OTA are the iroh package's; this module owns a thread, two
+//! frame slots and a subscriber factory, nothing more.
+//!
+//! `identity::begin` must have run: the node presents that key, from the
+//! same store, and is the same `did:mata`.
+
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
+use std::thread;
+use std::time::Duration;
+
+use rusty_esp_core::capability::{Chip, Declared, Manifest};
+use rusty_esp_iroh_core::media::{FLAG_KEY, PacketHeader, Subscribe};
+use rusty_esp_iroh_host::mjpeg::CODEC_MJPEG;
+use rusty_esp_iroh_host::{Extras, MediaSource, Node, NodeConfig, NodeIdentity};
+
+use crate::board::{self, Jpeg, Pcm};
+use crate::error::{Error, Result, record};
+use crate::identity::{self, DynKv, DynRng};
+
+/// The codec tag PCM blocks carry on `janus/media/1` (the JPEG tag is the
+/// iroh package's `CODEC_MJPEG`).
+pub const CODEC_PCM: [u8; 4] = *b"pcm ";
+
+/// What the node advertises: the capability manifest the home computer
+/// catalogs, signed by the device key.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// `model=` for the sidecar advertisement, e.g. `janus/porch-cam`.
+    pub model: String,
+    /// The firmware identifier in the manifest.
+    pub firmware: String,
+    /// The chip the manifest names.
+    pub chip: Chip,
+    /// Every capability, with its status and backing crate.
+    pub declared: Vec<Declared>,
+    /// Relay and pkarr discovery (the PSRAM tier); off is LAN-direct.
+    pub relay: bool,
+}
+
+impl Config {
+    /// A LAN-direct node for `model` on `chip`, declaring nothing yet.
+    #[must_use]
+    pub fn new(model: &str, chip: Chip) -> Self {
+        Config {
+            model: model.to_owned(),
+            firmware: format!("rusty_esp_arduino {}", env!("CARGO_PKG_VERSION")),
+            chip,
+            declared: Vec::new(),
+            relay: false,
+        }
+    }
+
+    /// Add a declaration.
+    #[must_use]
+    pub fn declare(mut self, declared: Declared) -> Self {
+        self.declared.push(declared);
+        self
+    }
+
+    /// Ask for relay reachability.
+    #[must_use]
+    pub fn with_relay(mut self, relay: bool) -> Self {
+        self.relay = relay;
+        self
+    }
+}
+
+/// The latest frame of one codec, and how many have been pushed.
+struct Slot {
+    seq: u32,
+    frame: Option<(u64, Arc<Vec<u8>>)>,
+    closed: bool,
+}
+
+struct Channel {
+    codec: [u8; 4],
+    slot: Mutex<Slot>,
+    cv: Condvar,
+}
+
+impl Channel {
+    fn new(codec: [u8; 4]) -> Self {
+        Channel {
+            codec,
+            slot: Mutex::new(Slot {
+                seq: 0,
+                frame: None,
+                closed: false,
+            }),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn push(&self, timestamp_us: u64, bytes: &[u8]) {
+        let mut g = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        g.seq = g.seq.wrapping_add(1);
+        g.frame = Some((timestamp_us, Arc::new(bytes.to_vec())));
+        self.cv.notify_all();
+    }
+
+    fn close(&self) {
+        self.slot
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .closed = true;
+        self.cv.notify_all();
+    }
+}
+
+struct Shared {
+    video: Channel,
+    audio: Channel,
+    subscribers: AtomicU32,
+    frames: AtomicU64,
+    blocks: AtomicU64,
+}
+
+/// One subscriber's view of a channel: every frame pushed after it joined,
+/// the newest when it fell behind, never a duplicate.
+struct LatestFrames {
+    shared: Arc<Shared>,
+    video: bool,
+    seen: u32,
+    out_seq: u32,
+}
+
+impl MediaSource for LatestFrames {
+    fn next_packet(&mut self) -> Option<(PacketHeader, Vec<u8>)> {
+        let shared = Arc::clone(&self.shared);
+        let ch = if self.video {
+            &shared.video
+        } else {
+            &shared.audio
+        };
+        let mut g = ch.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if g.closed {
+                return None;
+            }
+            if g.seq != self.seen
+                && let Some((timestamp_us, bytes)) = &g.frame
+            {
+                self.seen = g.seq;
+                let header = PacketHeader {
+                    seq: self.out_seq,
+                    timestamp_us: *timestamp_us,
+                    codec: ch.codec,
+                    flags: FLAG_KEY,
+                    len: u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+                };
+                self.out_seq = self.out_seq.wrapping_add(1);
+                return Some((header, bytes.to_vec()));
+            }
+            g = ch
+                .cv
+                .wait_timeout(g, Duration::from_secs(1))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    fn interval(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// A subscriber for a codec nothing here produces: over before it starts.
+struct Nothing;
+
+impl MediaSource for Nothing {
+    fn next_packet(&mut self) -> Option<(PacketHeader, Vec<u8>)> {
+        None
+    }
+
+    fn interval(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// A subscriber factory, as the node takes it.
+type Factory = Arc<dyn Fn(&Subscribe) -> Box<dyn MediaSource> + Send + Sync>;
+
+struct State {
+    shared: Arc<Shared>,
+    did: String,
+    ticket: String,
+    port: u16,
+    stop: mpsc::Sender<()>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+static MESH: Mutex<Option<State>> = Mutex::new(None);
+
+/// The facade's view of the node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stats {
+    /// Media subscribers that joined since `begin`.
+    pub subscribers: u32,
+    /// JPEG frames pushed.
+    pub frames: u64,
+    /// PCM blocks pushed.
+    pub blocks: u64,
+}
+
+fn try_begin(config: Config) -> Result<()> {
+    if MESH
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_some()
+    {
+        return Err(Error::Io("mesh: begin was already called".into()));
+    }
+    let (kv, rng) = identity::take_store().ok_or(Error::NotBegun("identity"))?;
+    let maker = identity::maker();
+    let mut ips: Vec<IpAddr> = Vec::new();
+    if let Some(ip) = board::with(|b| Ok(b.local_ip()))? {
+        ips.push(ip);
+    }
+    ips.push(IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+    let shared = Arc::new(Shared {
+        video: Channel::new(CODEC_MJPEG),
+        audio: Channel::new(CODEC_PCM),
+        subscribers: AtomicU32::new(0),
+        frames: AtomicU64::new(0),
+        blocks: AtomicU64::new(0),
+    });
+    let factory_shared = Arc::clone(&shared);
+    let factory: Factory = Arc::new(move |sub: &Subscribe| {
+        factory_shared.subscribers.fetch_add(1, Ordering::Relaxed);
+        if sub.codec == CODEC_MJPEG || sub.codec == CODEC_PCM {
+            Box::new(LatestFrames {
+                shared: Arc::clone(&factory_shared),
+                video: sub.codec == CODEC_MJPEG,
+                seen: 0,
+                out_seq: 0,
+            }) as Box<dyn MediaSource>
+        } else {
+            Box::new(Nothing)
+        }
+    });
+
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<(String, String, u16)>>();
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let thread = thread::Builder::new()
+        .name("janus-mesh".into())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(Error::Io(format!("mesh: runtime: {e}"))));
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                let mut kv = DynKv(kv);
+                let mut rng = DynRng(rng);
+                let identity =
+                    match NodeIdentity::load_or_create(&mut kv, &mut rng, identity::DEVICE_ID) {
+                        Ok(i) => i,
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(Error::Io(format!("mesh: identity: {e:?}"))));
+                            return;
+                        }
+                    };
+                let manifest = Manifest {
+                    model: &config.model,
+                    firmware: &config.firmware,
+                    chip: config.chip,
+                    declared: &config.declared,
+                };
+                let node_config = NodeConfig {
+                    relay: config.relay,
+                    model: config.model.clone(),
+                    firmware: config.firmware.clone(),
+                };
+                let extras = Extras {
+                    maker_did: maker,
+                    ota: None,
+                    neighbours: None,
+                };
+                let node = match Node::bind_with(
+                    identity,
+                    kv.0,
+                    &manifest,
+                    Some(factory),
+                    node_config,
+                    extras,
+                )
+                .await
+                {
+                    Ok(n) => n,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(Error::Io(format!("mesh: bind: {e}"))));
+                        return;
+                    }
+                };
+                let _ = node.refresh_ticket(&ips);
+                let _ = ready_tx.send(Ok((node.did().to_owned(), node.ticket_text(), node.port())));
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    match stop_rx.try_recv() {
+                        Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                        Err(mpsc::TryRecvError::Empty) => {}
+                    }
+                }
+                node.shutdown().await;
+            });
+        })
+        .map_err(|e| Error::Io(format!("mesh: thread: {e}")))?;
+
+    let (did, ticket, port) = ready_rx
+        .recv_timeout(Duration::from_secs(30))
+        .map_err(|_| Error::Io("mesh: the node did not come up within 30 s".into()))??;
+    *MESH.lock().unwrap_or_else(PoisonError::into_inner) = Some(State {
+        shared,
+        did,
+        ticket,
+        port,
+        stop: stop_tx,
+        thread: Some(thread),
+    });
+    Ok(())
+}
+
+/// Bind the node and start serving: adoption, the manifest RPC, the media
+/// ALPN. `false` — and [`crate::last_error`] says why — without
+/// `identity::begin`, or when the endpoint cannot bind.
+pub fn begin(config: Config) -> bool {
+    match try_begin(config) {
+        Ok(()) => true,
+        Err(e) => {
+            record(e);
+            false
+        }
+    }
+}
+
+fn with_state<R>(f: impl FnOnce(&State) -> R) -> Option<R> {
+    MESH.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .map(f)
+}
+
+/// Offer `frame` to every media subscriber (the newest frame wins when a
+/// subscriber is slower than the camera). `false` before `begin`.
+pub fn push_media(frame: &Jpeg) -> bool {
+    match with_state(|s| {
+        s.shared.video.push(frame.timestamp.0, &frame.bytes);
+        s.shared.frames.fetch_add(1, Ordering::Relaxed);
+    }) {
+        Some(()) => true,
+        None => {
+            record(Error::NotBegun("mesh"));
+            false
+        }
+    }
+}
+
+/// Offer `pcm` to every PCM subscriber. `false` before `begin`.
+pub fn push_media_pcm(pcm: &Pcm) -> bool {
+    match with_state(|s| {
+        s.shared.audio.push(pcm.timestamp.0, &pcm.bytes);
+        s.shared.blocks.fetch_add(1, Ordering::Relaxed);
+    }) {
+        Some(()) => true,
+        None => {
+            record(Error::NotBegun("mesh"));
+            false
+        }
+    }
+}
+
+/// Give the node its turn. The node runs on its own thread, so this is the
+/// sketch's place to read what happened; it returns the counters.
+#[must_use]
+pub fn service() -> Stats {
+    with_state(|s| Stats {
+        subscribers: s.shared.subscribers.load(Ordering::Relaxed),
+        frames: s.shared.frames.load(Ordering::Relaxed),
+        blocks: s.shared.blocks.load(Ordering::Relaxed),
+    })
+    .unwrap_or(Stats {
+        subscribers: 0,
+        frames: 0,
+        blocks: 0,
+    })
+}
+
+/// The node's DID (the device's, from `identity`).
+#[must_use]
+pub fn did() -> Option<String> {
+    with_state(|s| s.did.clone())
+}
+
+/// The adoption ticket a home computer scans, as text.
+#[must_use]
+pub fn ticket() -> Option<String> {
+    with_state(|s| s.ticket.clone())
+}
+
+/// The UDP port the endpoint bound.
+#[must_use]
+pub fn port() -> Option<u16> {
+    with_state(|s| s.port)
+}
+
+/// Whether `begin` succeeded.
+#[must_use]
+pub fn begun() -> bool {
+    with_state(|_| ()).is_some()
+}
+
+/// Stop the node and release the port (tests; a sketch that ends).
+pub fn end() {
+    let state = MESH.lock().unwrap_or_else(PoisonError::into_inner).take();
+    if let Some(mut s) = state {
+        s.shared.video.close();
+        s.shared.audio.close();
+        let _ = s.stop.send(());
+        if let Some(t) = s.thread.take() {
+            let _ = t.join();
+        }
+    }
+}

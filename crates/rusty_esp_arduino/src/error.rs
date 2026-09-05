@@ -19,6 +19,8 @@ pub enum Error {
     Core(rusty_esp_core::error::Error),
     /// The operating system refused (a socket, a file); the text is its own.
     Io(String),
+    /// The board has no such seam (a store for keys, an entropy source).
+    Missing(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -28,6 +30,7 @@ impl fmt::Display for Error {
             Error::NotBegun(what) => write!(f, "{what}: begin was not called"),
             Error::Core(e) => write!(f, "{e:?}"),
             Error::Io(e) => f.write_str(e),
+            Error::Missing(what) => write!(f, "the board has no {what}"),
         }
     }
 }
