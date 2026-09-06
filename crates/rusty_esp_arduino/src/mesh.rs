@@ -26,6 +26,11 @@ use crate::identity::{self, DynKv, DynRng};
 /// iroh package's `CODEC_MJPEG`).
 pub const CODEC_PCM: [u8; 4] = *b"pcm ";
 
+/// The media codec tag of a telemetry stream: the payload is opaque to
+/// the transport (a `rusty_esp_signal_core::radar::presence::Presence`
+/// today), the way the bridge already carries a neighbour's telemetry.
+pub const CODEC_TELEMETRY: [u8; 4] = *b"tlm ";
+
 /// What the node advertises: the capability manifest the home computer
 /// catalogs, signed by the device key.
 #[derive(Debug, Clone)]
@@ -115,16 +120,26 @@ impl Channel {
 struct Shared {
     video: Channel,
     audio: Channel,
+    telemetry: Channel,
     subscribers: AtomicU32,
     frames: AtomicU64,
     blocks: AtomicU64,
+    readings: AtomicU64,
+}
+
+/// Which channel a subscriber joined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Which {
+    Video,
+    Audio,
+    Telemetry,
 }
 
 /// One subscriber's view of a channel: every frame pushed after it joined,
 /// the newest when it fell behind, never a duplicate.
 struct LatestFrames {
     shared: Arc<Shared>,
-    video: bool,
+    which: Which,
     seen: u32,
     out_seq: u32,
 }
@@ -132,10 +147,10 @@ struct LatestFrames {
 impl MediaSource for LatestFrames {
     fn next_packet(&mut self) -> Option<(PacketHeader, Vec<u8>)> {
         let shared = Arc::clone(&self.shared);
-        let ch = if self.video {
-            &shared.video
-        } else {
-            &shared.audio
+        let ch = match self.which {
+            Which::Video => &shared.video,
+            Which::Audio => &shared.audio,
+            Which::Telemetry => &shared.telemetry,
         };
         let mut g = ch.slot.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
@@ -205,6 +220,8 @@ pub struct Stats {
     pub frames: u64,
     /// PCM blocks pushed.
     pub blocks: u64,
+    /// Telemetry readings pushed.
+    pub readings: u64,
 }
 
 fn try_begin(config: Config) -> Result<()> {
@@ -226,17 +243,25 @@ fn try_begin(config: Config) -> Result<()> {
     let shared = Arc::new(Shared {
         video: Channel::new(CODEC_MJPEG),
         audio: Channel::new(CODEC_PCM),
+        telemetry: Channel::new(CODEC_TELEMETRY),
         subscribers: AtomicU32::new(0),
         frames: AtomicU64::new(0),
         blocks: AtomicU64::new(0),
+        readings: AtomicU64::new(0),
     });
     let factory_shared = Arc::clone(&shared);
     let factory: Factory = Arc::new(move |sub: &Subscribe| {
         factory_shared.subscribers.fetch_add(1, Ordering::Relaxed);
-        if sub.codec == CODEC_MJPEG || sub.codec == CODEC_PCM {
+        let which = match sub.codec {
+            c if c == CODEC_MJPEG => Some(Which::Video),
+            c if c == CODEC_PCM => Some(Which::Audio),
+            c if c == CODEC_TELEMETRY => Some(Which::Telemetry),
+            _ => None,
+        };
+        if let Some(which) = which {
             Box::new(LatestFrames {
                 shared: Arc::clone(&factory_shared),
-                video: sub.codec == CODEC_MJPEG,
+                which,
                 seen: 0,
                 out_seq: 0,
             }) as Box<dyn MediaSource>
@@ -380,6 +405,24 @@ pub fn push_media_pcm(pcm: &Pcm) -> bool {
     }
 }
 
+/// Offer `reading` to every telemetry subscriber. The bytes are opaque to
+/// the mesh; encode them with
+/// `rusty_esp_signal_core::radar::presence::Presence::encode`, which is what
+/// a home computer decodes them with. `false` before `begin`.
+pub fn push_telemetry(reading: &[u8]) -> bool {
+    let at = crate::sketch::millis().saturating_mul(1000);
+    match with_state(|s| {
+        s.shared.telemetry.push(at, reading);
+        s.shared.readings.fetch_add(1, Ordering::Relaxed);
+    }) {
+        Some(()) => true,
+        None => {
+            record(Error::NotBegun("mesh"));
+            false
+        }
+    }
+}
+
 /// Give the node its turn. The node runs on its own thread, so this is the
 /// sketch's place to read what happened; it returns the counters.
 #[must_use]
@@ -388,11 +431,13 @@ pub fn service() -> Stats {
         subscribers: s.shared.subscribers.load(Ordering::Relaxed),
         frames: s.shared.frames.load(Ordering::Relaxed),
         blocks: s.shared.blocks.load(Ordering::Relaxed),
+        readings: s.shared.readings.load(Ordering::Relaxed),
     })
     .unwrap_or(Stats {
         subscribers: 0,
         frames: 0,
         blocks: 0,
+        readings: 0,
     })
 }
 
@@ -426,6 +471,7 @@ pub fn end() {
     if let Some(mut s) = state {
         s.shared.video.close();
         s.shared.audio.close();
+        s.shared.telemetry.close();
         let _ = s.stop.send(());
         if let Some(t) = s.thread.take() {
             let _ = t.join();

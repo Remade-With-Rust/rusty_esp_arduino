@@ -7,6 +7,6 @@ pub use crate::host::{self, Camera, HostBoard, Microphone};
 pub use crate::identity;
 #[cfg(feature = "mesh")]
 pub use crate::mesh;
-pub use crate::provision;
 pub use crate::sketch::{self, delay, millis};
 pub use crate::{Error, cam, last_error, mic, stream, wifi};
+pub use crate::{provision, radar};

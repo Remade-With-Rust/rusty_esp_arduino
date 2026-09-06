@@ -63,6 +63,20 @@ pub struct HostBoard {
     store_taken: bool,
     provisioning: Option<String>,
     settings: Option<(String, String)>,
+    radar: Option<crate::radar::Config>,
+}
+
+/// What a "sensor" saw: the queue a test fills with
+/// [`inject_presence`]; `radar_read` drains it.
+static READINGS: Mutex<Vec<crate::radar::Presence>> = Mutex::new(Vec::new());
+
+/// Act as the sensor: hand the installed laptop board this reading; the
+/// sketch's next `radar::read` returns it.
+pub fn inject_presence(reading: crate::radar::Presence) {
+    READINGS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(reading);
 }
 
 /// What a "phone" wrote to the laptop board: the credential queue a test
@@ -145,6 +159,7 @@ impl HostBoard {
             store_taken: false,
             provisioning: None,
             settings: None,
+            radar: None,
         }
     }
 
@@ -585,6 +600,23 @@ impl Board for HostBoard {
     fn restart(&mut self) -> Result<()> {
         RESTARTS.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn radar_begin(&mut self, config: &crate::radar::Config) -> Result<()> {
+        self.radar = Some(*config);
+        Ok(())
+    }
+
+    fn radar_read(&mut self) -> Result<Option<crate::radar::Presence>> {
+        if self.radar.is_none() {
+            return Ok(None);
+        }
+        let mut q = READINGS.lock().unwrap_or_else(PoisonError::into_inner);
+        Ok(if q.is_empty() {
+            None
+        } else {
+            Some(q.remove(0))
+        })
     }
 
     fn store_settings(&mut self, ssid: &str, psk: &str) -> Result<()> {

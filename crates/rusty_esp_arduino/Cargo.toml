@@ -29,6 +29,7 @@ rusty_esp_video-core = { workspace = true, features = ["std"] }
 rusty_esp_video-esp = { workspace = true, features = ["std"] }
 rusty_esp_audio-core = { workspace = true, features = ["std"] }
 rusty_esp_mid-core = { workspace = true, features = ["std"] }
+rusty_esp_signal-core = { workspace = true, features = ["std"] }
 # The page token's URL form (the same encoder the DID uses).
 bs58 = { version = "0.5", default-features = false }
 rusty_esp_iroh-core = { workspace = true, features = ["std"], optional = true }

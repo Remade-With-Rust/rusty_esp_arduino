@@ -33,6 +33,8 @@ rusty_esp_video-esp = { version = "0.1", git = "https://github.com/Remade-With-R
 rusty_esp_audio-core = { version = "0.1", git = "https://github.com/Remade-With-Rust/rusty_esp_audio", default-features = false }
 # identity::begin (the device key and its DID) and, behind `mesh`, the node.
 rusty_esp_mid-core = { version = "0.1", git = "https://github.com/Remade-With-Rust/rusty_esp_mid", default-features = false }
+# radar::read (the one presence record every presence sensor answers in).
+rusty_esp_signal-core = { version = "0.1", git = "https://github.com/Remade-With-Rust/rusty_esp_signal", default-features = false }
 rusty_esp_iroh-core = { version = "0.1", git = "https://github.com/Remade-With-Rust/rusty_esp_iroh", default-features = false }
 rusty_esp_iroh-host = { version = "0.1", git = "https://github.com/Remade-With-Rust/rusty_esp_iroh", default-features = false }
 

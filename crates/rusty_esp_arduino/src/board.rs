@@ -14,6 +14,7 @@ use rusty_esp_core::pcm::PcmFormat;
 use rusty_esp_core::time::Micros;
 
 use crate::error::{Error, Result};
+use crate::radar::Presence;
 use crate::{cam, mic};
 
 /// One JPEG frame from the camera.
@@ -109,6 +110,17 @@ pub trait Board: Send {
     /// carries on.
     fn restart(&mut self) -> Result<()> {
         Err(Error::Missing("a way to restart this board"))
+    }
+
+    /// Start the presence sensor. A board without one answers
+    /// `Err(Error::Missing(..))` and `radar::begin` says so.
+    fn radar_begin(&mut self, _config: &crate::radar::Config) -> Result<()> {
+        Err(Error::Missing("a presence sensor on this board"))
+    }
+
+    /// The newest reading since the last call, or `None` when none is ready.
+    fn radar_read(&mut self) -> Result<Option<Presence>> {
+        Ok(None)
     }
 }
 

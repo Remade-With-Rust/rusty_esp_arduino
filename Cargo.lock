@@ -2925,6 +2925,7 @@ dependencies = [
  "rusty_esp_iroh-core",
  "rusty_esp_iroh-host",
  "rusty_esp_mid-core",
+ "rusty_esp_signal-core",
  "rusty_esp_video-core",
  "rusty_esp_video-esp",
  "rusty_jpeg",
@@ -3009,6 +3010,21 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "rusty_esp_signal-core"
+version = "0.1.0"
+source = "git+https://github.com/Remade-With-Rust/rusty_esp_signal#a71948d903f7d3c44136cee3e1bb40f9c2b019d0"
+dependencies = [
+ "hkdf",
+ "hmac",
+ "p256",
+ "rusty_esp_core",
+ "rusty_esp_dsp",
+ "rusty_esp_mid-core",
+ "sha2 0.10.9",
+ "zeroize",
 ]
 
 [[package]]
