@@ -8,7 +8,7 @@
 //! same store, and is the same `did:mata`.
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -122,9 +122,13 @@ struct Shared {
     audio: Channel,
     telemetry: Channel,
     subscribers: AtomicU32,
-    frames: AtomicU64,
-    blocks: AtomicU64,
-    readings: AtomicU64,
+    // 32-bit counters on purpose: a 32-bit RISC-V chip (the C6, the C3)
+    // has no 64-bit atomic, and the mesh runs on those. `Stats` still
+    // reports `u64`; these wrap after 4.29 billion, which is 13 years of
+    // pushing at 10 a second.
+    frames: AtomicU32,
+    blocks: AtomicU32,
+    readings: AtomicU32,
 }
 
 /// Which channel a subscriber joined.
@@ -245,9 +249,9 @@ fn try_begin(config: Config) -> Result<()> {
         audio: Channel::new(CODEC_PCM),
         telemetry: Channel::new(CODEC_TELEMETRY),
         subscribers: AtomicU32::new(0),
-        frames: AtomicU64::new(0),
-        blocks: AtomicU64::new(0),
-        readings: AtomicU64::new(0),
+        frames: AtomicU32::new(0),
+        blocks: AtomicU32::new(0),
+        readings: AtomicU32::new(0),
     });
     let factory_shared = Arc::clone(&shared);
     let factory: Factory = Arc::new(move |sub: &Subscribe| {
@@ -429,9 +433,9 @@ pub fn push_telemetry(reading: &[u8]) -> bool {
 pub fn service() -> Stats {
     with_state(|s| Stats {
         subscribers: s.shared.subscribers.load(Ordering::Relaxed),
-        frames: s.shared.frames.load(Ordering::Relaxed),
-        blocks: s.shared.blocks.load(Ordering::Relaxed),
-        readings: s.shared.readings.load(Ordering::Relaxed),
+        frames: u64::from(s.shared.frames.load(Ordering::Relaxed)),
+        blocks: u64::from(s.shared.blocks.load(Ordering::Relaxed)),
+        readings: u64::from(s.shared.readings.load(Ordering::Relaxed)),
     })
     .unwrap_or(Stats {
         subscribers: 0,
