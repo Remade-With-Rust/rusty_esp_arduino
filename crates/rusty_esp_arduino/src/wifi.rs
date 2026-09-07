@@ -1,4 +1,10 @@
-//! The network, Arduino-shaped: `begin` once, then `local_ip`.
+//! The network, Arduino-shaped: `begin` or `host` once, then `local_ip`.
+//!
+//! Two ways onto a network and one way to ask where you are.
+//! [`begin`] joins somebody else's; [`host`] runs one of the device's own,
+//! which is what a board with no access point in reach has to do. Either
+//! way [`local_ip`] is the address to hand out and [`connected`] is whether
+//! there is one.
 
 use std::net::IpAddr;
 
@@ -13,13 +19,23 @@ pub fn begin(ssid: &str, psk: &str) -> bool {
     error::ok(board::with(|b| b.wifi_begin(ssid, psk)))
 }
 
-/// The interface address once joined.
+/// Host an access point named `ssid` with `psk` instead of joining one, for
+/// a device with no network in reach. `false` (and [`crate::last_error`])
+/// when the board has no access-point mode or refuses the arguments.
+///
+/// `psk` must be 8 to 63 bytes. Clients then reach the device at
+/// [`local_ip`], which is the address of the network it is now running.
+pub fn host(ssid: &str, psk: &str) -> bool {
+    error::ok(board::with(|b| b.wifi_host(ssid, psk)))
+}
+
+/// The interface address, once joined or once hosting.
 #[must_use]
 pub fn local_ip() -> Option<IpAddr> {
     board::with(|b| Ok(b.local_ip())).unwrap_or(None)
 }
 
-/// Whether `begin` has succeeded.
+/// Whether [`begin`] or [`host`] has succeeded.
 #[must_use]
 pub fn connected() -> bool {
     local_ip().is_some()

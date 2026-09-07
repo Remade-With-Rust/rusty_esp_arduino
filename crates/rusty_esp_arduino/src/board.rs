@@ -55,7 +55,7 @@ impl Pcm {
 pub trait Board: Send {
     /// Join the network `ssid` with `psk`; return when joined or refused.
     fn wifi_begin(&mut self, ssid: &str, psk: &str) -> Result<()>;
-    /// The interface address once joined.
+    /// The interface address, once joined or once hosting.
     fn local_ip(&self) -> Option<IpAddr>;
     /// Configure and start the camera.
     fn cam_begin(&mut self, config: &cam::Config) -> Result<()>;
@@ -67,6 +67,23 @@ pub trait Board: Send {
     fn mic_read(&mut self) -> Result<Option<Pcm>>;
     /// Milliseconds since the board started.
     fn millis(&self) -> u64;
+
+    /// Host an access point called `ssid` with `psk`, instead of joining
+    /// one. A device with no network in reach is still a device someone
+    /// needs to reach: this is how a camera in a shed, or a board on a
+    /// bench with no router, is viewed and provisioned.
+    ///
+    /// Provided, and refusing by default, so a board that has no radio says
+    /// so rather than appearing to succeed. `psk` must be 8 to 63 bytes:
+    /// WPA2 has no shorter key, and an open access point is not offered
+    /// here because a device that serves its camera should not serve it to
+    /// the street.
+    ///
+    /// After this returns `Ok`, [`Board::local_ip`] is the address the
+    /// board answers on, and clients reach it over the network it now runs.
+    fn wifi_host(&mut self, _ssid: &str, _psk: &str) -> Result<()> {
+        Err(Error::Missing("access-point mode"))
+    }
 
     /// The board's persistent store — NVS on a chip, a directory on the
     /// host — for the device's keys and its adoption. Taken once; `None`
