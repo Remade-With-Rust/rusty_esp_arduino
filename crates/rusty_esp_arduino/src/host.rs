@@ -66,6 +66,21 @@ pub struct HostBoard {
     radar: Option<crate::radar::Config>,
 }
 
+/// Every `max_fds` the installed laptop board was asked to prepare for, in
+/// order. The laptop has nothing to register, but a sketch that reached a
+/// runtime without asking is the defect that stopped C2's first boot, so the
+/// ask is recorded and [`async_prepared`] hands it to a test.
+static ASYNC_PREPARED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// What the laptop board was asked to prepare for, oldest first.
+#[must_use]
+pub fn async_prepared() -> Vec<usize> {
+    ASYNC_PREPARED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
 /// What a "sensor" saw: the queue a test fills with
 /// [`inject_presence`]; `radar_read` drains it.
 static READINGS: Mutex<Vec<crate::radar::Presence>> = Mutex::new(Vec::new());
@@ -562,6 +577,14 @@ impl Board for HostBoard {
         FileKv::open(&self.store)
             .ok()
             .map(|kv| Box::new(kv) as Box<dyn Kv + Send>)
+    }
+
+    fn prepare_async(&mut self, max_fds: usize) -> Result<()> {
+        ASYNC_PREPARED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(max_fds);
+        Ok(())
     }
 
     fn take_rng(&mut self) -> Option<Box<dyn Rng + Send>> {

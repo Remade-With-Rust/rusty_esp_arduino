@@ -22,6 +22,27 @@ use crate::board::{self, Jpeg, Pcm};
 use crate::error::{Error, Result, record};
 use crate::identity::{self, DynKv, DynRng};
 
+/// How many `eventfd`s tokio's I/O driver may hold at once. The driver opens
+/// one per runtime; 5 is what n0 uses, and the board registers the VFS that
+/// serves them in [`Board::prepare_async`](crate::board::Board::prepare_async).
+const ASYNC_MAX_FDS: usize = 5;
+
+/// The mesh thread's stack on ESP-IDF, where the default pthread stack is
+/// 8 KiB and tokio's current-thread runtime runs the whole node on it — the
+/// QUIC handshake, rustls, the resolver. J3's hand-written firmware measured
+/// n0's DNS path at ~111 KiB and gives its runtime 114,688 bytes
+/// (rusty_esp_iroh/docs/LEDGER.md); the same number, asked for where the
+/// thread is made rather than in one board's sdkconfig, so every board that
+/// runs the mesh gets it.
+#[cfg(target_os = "espidf")]
+const MESH_STACK_BYTES: Option<usize> = Some(114_688);
+
+/// Everywhere else the platform's own default is already far larger — 2 MiB
+/// on Windows and Linux — and a debug build of the node needs it: 114,688
+/// overflowed the thread on the laptop. Ask for nothing and keep the default.
+#[cfg(not(target_os = "espidf"))]
+const MESH_STACK_BYTES: Option<usize> = None;
+
 /// The codec tag PCM blocks carry on `janus/media/1` (the JPEG tag is the
 /// iroh package's `CODEC_MJPEG`).
 pub const CODEC_PCM: [u8; 4] = *b"pcm ";
@@ -237,6 +258,10 @@ fn try_begin(config: Config) -> Result<()> {
         return Err(Error::Io("mesh: begin was already called".into()));
     }
     let (kv, rng) = identity::take_store().ok_or(Error::NotBegun("identity"))?;
+    // Before a runtime, not after: on ESP-IDF tokio's I/O driver opens an
+    // `eventfd`, and building the runtime is what fails if the VFS that
+    // serves it was never registered.
+    board::with(|b| b.prepare_async(ASYNC_MAX_FDS))?;
     let maker = identity::maker();
     let mut ips: Vec<IpAddr> = Vec::new();
     if let Some(ip) = board::with(|b| Ok(b.local_ip()))? {
@@ -276,8 +301,11 @@ fn try_begin(config: Config) -> Result<()> {
 
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(String, String, u16)>>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
-    let thread = thread::Builder::new()
-        .name("janus-mesh".into())
+    let mut builder = thread::Builder::new().name("janus-mesh".into());
+    if let Some(bytes) = MESH_STACK_BYTES {
+        builder = builder.stack_size(bytes);
+    }
+    let thread = builder
         .spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()

@@ -44,6 +44,16 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
         ))
         .declare(Declared::available(Capability::MidDevice, "rusty_esp_mid"));
     assert!(mesh::begin(config), "{:?}", last_error());
+    // Before it built a runtime, `begin` asked the board to prepare the
+    // platform for one. It is a no-op on the laptop and it is the whole
+    // difference between a mesh and no mesh on ESP-IDF, where tokio's I/O
+    // driver opens an `eventfd` that answers `EACCES` until a VFS is
+    // registered: C2's first boot on the XIAO, 2026-09-11.
+    assert_eq!(
+        rusty_esp_arduino::host::async_prepared(),
+        vec![5],
+        "begin prepares the platform once, before the runtime"
+    );
     assert_eq!(
         mesh::did().as_deref(),
         Some(did.as_str()),

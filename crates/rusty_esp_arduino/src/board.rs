@@ -92,6 +92,20 @@ pub trait Board: Send {
         None
     }
 
+    /// Prepare the platform for the async runtime [`mesh::begin`] is about
+    /// to build, and do it once. On ESP-IDF tokio's I/O driver opens an
+    /// `eventfd`, which is served by a VFS that must be registered first:
+    /// without it `eventfd()` answers `EACCES` and every runtime fails to
+    /// build with `Permission denied` — C2's first boot on the XIAO,
+    /// 2026-09-11. `max_fds` is how many the driver may hold at once. A
+    /// board with nothing to prepare — the laptop, anything that is not
+    /// ESP-IDF — answers `Ok`, which is the default here.
+    ///
+    /// [`mesh::begin`]: crate::mesh::begin
+    fn prepare_async(&mut self, _max_fds: usize) -> Result<()> {
+        Ok(())
+    }
+
     /// The board's entropy — the chip's TRNG, the OS on the host. Taken once.
     fn take_rng(&mut self) -> Option<Box<dyn Rng + Send>> {
         None
