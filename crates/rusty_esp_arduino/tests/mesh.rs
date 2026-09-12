@@ -80,7 +80,7 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
 
     // the iroh package's client, subscribing through the ticket
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let (got, loss) = rt.block_on(async {
+    let (got, loss, any) = rt.block_on(async {
         let client = Client::bind(None, None, false).await.unwrap();
         let t = Ticket::parse_text(&ticket).unwrap();
         let addr = endpoint_addr(&t).unwrap();
@@ -96,12 +96,40 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
             })
             .await
             .unwrap();
+        // And again as a subscriber that has not been told what this device
+        // carries -- the `client` example, a home computer meeting it for the
+        // first time. `any ` is the protocol's word for the device's default,
+        // and asking with the explicit tag alone is how a green test hid a
+        // board that sent nothing (C2's first trip, 2026-09-11).
+        let mut any: Vec<Vec<u8>> = Vec::new();
+        let wild = Subscribe {
+            codec: mesh::CODEC_ANY,
+            max_fps: 30,
+            max_kbps: 0,
+        };
+        let _ = client
+            .subscribe(&addr, &wild, 4, Duration::from_secs(15), |_h, bytes| {
+                any.push(bytes.to_vec());
+            })
+            .await
+            .unwrap();
         client.close().await;
-        (got, loss)
+        (got, loss, any)
     });
     pusher.join().unwrap();
 
     assert_eq!(got.len(), 8, "eight packets asked for, eight received");
+    assert_eq!(
+        any.len(),
+        4,
+        "a subscriber asking for the device's default gets the camera"
+    );
+    for bytes in &any {
+        assert!(
+            frames.iter().any(|f| &f.bytes == bytes),
+            "the default channel served a frame that was pushed"
+        );
+    }
     assert_eq!(loss.lost, 0);
     for (i, (seq, bytes)) in got.iter().enumerate() {
         assert_eq!(*seq, i as u32, "the subscriber's own sequence, from 0");

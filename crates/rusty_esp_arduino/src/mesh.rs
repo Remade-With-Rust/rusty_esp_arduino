@@ -209,6 +209,13 @@ impl MediaSource for LatestFrames {
     }
 }
 
+/// The codec tag a subscriber sends to mean "whatever this device makes":
+/// `rusty_esp_iroh_core::media::Subscribe` documents it as the device's
+/// default, and every source in the family honours it. A subscriber that has
+/// not been told what a device carries — a home computer meeting it for the
+/// first time, the `client` example — sends this.
+pub const CODEC_ANY: [u8; 4] = *b"any ";
+
 /// A subscriber for a codec nothing here produces: over before it starts.
 struct Nothing;
 
@@ -285,6 +292,24 @@ fn try_begin(config: Config) -> Result<()> {
             c if c == CODEC_MJPEG => Some(Which::Video),
             c if c == CODEC_PCM => Some(Which::Audio),
             c if c == CODEC_TELEMETRY => Some(Which::Telemetry),
+            // "The device's default" is what the device is actually making,
+            // asked at the moment someone subscribes: the camera if it has
+            // pushed a frame, else the microphone, else the sensor. A device
+            // that has produced nothing yet answers with its video channel,
+            // which is where a subscriber should wait for a camera that has
+            // not warmed up. C2's first trip received nothing because this
+            // arm did not exist (2026-09-11).
+            c if c == CODEC_ANY => Some(
+                if factory_shared.frames.load(Ordering::Relaxed) > 0 {
+                    Which::Video
+                } else if factory_shared.blocks.load(Ordering::Relaxed) > 0 {
+                    Which::Audio
+                } else if factory_shared.readings.load(Ordering::Relaxed) > 0 {
+                    Which::Telemetry
+                } else {
+                    Which::Video
+                },
+            ),
             _ => None,
         };
         if let Some(which) = which {
