@@ -150,6 +150,11 @@ struct Shared {
     frames: AtomicU32,
     blocks: AtomicU32,
     readings: AtomicU32,
+    /// The node's own counters, copied here every 100 ms by the mesh thread
+    /// so the sketch can read them without holding the node.
+    node_sent: AtomicU32,
+    node_send_errors: AtomicU32,
+    node_subscribers: AtomicU32,
 }
 
 /// Which channel a subscriber joined.
@@ -283,6 +288,14 @@ pub struct Stats {
     pub blocks: u64,
     /// Telemetry readings pushed.
     pub readings: u64,
+    /// Media packets the **node** put on the wire, which is not the same
+    /// number as the frames the sketch pushed: a subscriber takes the latest
+    /// frame, and a device with no subscriber sends nothing at all.
+    pub sent: u32,
+    /// Media packets the node could not send.
+    pub send_errors: u32,
+    /// Subscriptions the node accepted.
+    pub node_subscribers: u32,
 }
 
 fn try_begin(config: Config) -> Result<()> {
@@ -314,8 +327,12 @@ fn try_begin(config: Config) -> Result<()> {
         frames: AtomicU32::new(0),
         blocks: AtomicU32::new(0),
         readings: AtomicU32::new(0),
+        node_sent: AtomicU32::new(0),
+        node_send_errors: AtomicU32::new(0),
+        node_subscribers: AtomicU32::new(0),
     });
     let factory_shared = Arc::clone(&shared);
+    let counter_shared = Arc::clone(&shared);
     let factory: Factory = Arc::new(move |sub: &Subscribe| {
         factory_shared.subscribers.fetch_add(1, Ordering::Relaxed);
         let which = match sub.codec {
@@ -427,6 +444,25 @@ fn try_begin(config: Config) -> Result<()> {
                 )));
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
+                    // What the NODE did, beside what the sketch pushed. A
+                    // subscriber that receives nothing is a different defect
+                    // depending on whether the node sent and failed, sent
+                    // nothing, or never saw the subscription -- and until
+                    // 2026-09-11 the sketch could not tell those apart.
+                    {
+                        let c = &node.state().counters;
+                        counter_shared
+                            .node_sent
+                            .store(c.media_packets.load(Ordering::Relaxed), Ordering::Relaxed);
+                        counter_shared.node_send_errors.store(
+                            c.media_send_errors.load(Ordering::Relaxed),
+                            Ordering::Relaxed,
+                        );
+                        counter_shared.node_subscribers.store(
+                            c.media_subscribers.load(Ordering::Relaxed),
+                            Ordering::Relaxed,
+                        );
+                    }
                     match stop_rx.try_recv() {
                         Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
                         Err(mpsc::TryRecvError::Empty) => {}
@@ -542,12 +578,18 @@ pub fn service() -> Stats {
         frames: u64::from(s.shared.frames.load(Ordering::Relaxed)),
         blocks: u64::from(s.shared.blocks.load(Ordering::Relaxed)),
         readings: u64::from(s.shared.readings.load(Ordering::Relaxed)),
+        sent: s.shared.node_sent.load(Ordering::Relaxed),
+        send_errors: s.shared.node_send_errors.load(Ordering::Relaxed),
+        node_subscribers: s.shared.node_subscribers.load(Ordering::Relaxed),
     })
     .unwrap_or(Stats {
         subscribers: 0,
         frames: 0,
         blocks: 0,
         readings: 0,
+        sent: 0,
+        send_errors: 0,
+        node_subscribers: 0,
     })
 }
 
