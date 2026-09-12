@@ -92,6 +92,25 @@ pub trait Board: Send {
         None
     }
 
+    /// Publish this device on the local network so something can find it
+    /// without being told a ticket first. `service_type` is the full mDNS
+    /// type (`_mata-oem-sidecar._tcp.local.`), `txt` the record the home
+    /// computer's pair client reads back, and the board keeps whatever
+    /// handle its platform needs alive. A board with no mDNS — the laptop,
+    /// a chip whose firmware did not compile it in — answers `Ok` and is
+    /// reachable by ticket alone, which is what every generated mesh cell
+    /// was until 2026-09-11.
+    fn advertise(
+        &mut self,
+        _hostname: &str,
+        _instance: &str,
+        _service_type: &str,
+        _port: u16,
+        _txt: &[(String, String)],
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Prepare the platform for the async runtime [`mesh::begin`] is about
     /// to build, and do it once. On ESP-IDF tokio's I/O driver opens an
     /// `eventfd`, which is served by a VFS that must be registered first:

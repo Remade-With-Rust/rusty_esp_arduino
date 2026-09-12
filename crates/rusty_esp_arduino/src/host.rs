@@ -66,6 +66,22 @@ pub struct HostBoard {
     radar: Option<crate::radar::Config>,
 }
 
+/// What the installed laptop board was last asked to publish on the local
+/// network: `(hostname, instance, service_type, port, txt)`. The laptop has
+/// no mDNS of its own, and a device nothing can discover is exactly the
+/// defect, so the ask is recorded and [`advertised`] hands it to a test.
+type Advert = (String, String, String, u16, Vec<(String, String)>);
+static ADVERTISED: Mutex<Option<Advert>> = Mutex::new(None);
+
+/// What the laptop board was last asked to publish, if anything.
+#[must_use]
+pub fn advertised() -> Option<Advert> {
+    ADVERTISED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
 /// Every `max_fds` the installed laptop board was asked to prepare for, in
 /// order. The laptop has nothing to register, but a sketch that reached a
 /// runtime without asking is the defect that stopped C2's first boot, so the
@@ -577,6 +593,26 @@ impl Board for HostBoard {
         FileKv::open(&self.store)
             .ok()
             .map(|kv| Box::new(kv) as Box<dyn Kv + Send>)
+    }
+
+    fn advertise(
+        &mut self,
+        hostname: &str,
+        instance: &str,
+        service_type: &str,
+        port: u16,
+        txt: &[(String, String)],
+    ) -> Result<()> {
+        *ADVERTISED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((
+            hostname.to_owned(),
+            instance.to_owned(),
+            service_type.to_owned(),
+            port,
+            txt.to_vec(),
+        ));
+        Ok(())
     }
 
     fn prepare_async(&mut self, max_fds: usize) -> Result<()> {

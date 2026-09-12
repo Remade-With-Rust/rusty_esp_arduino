@@ -59,6 +59,25 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
         Some(did.as_str()),
         "the node is the device"
     );
+    // The device published itself, which is the only way anything finds it
+    // without being handed a ticket first. A generated mesh cell advertised
+    // nothing at all until 2026-09-11 and was reachable by ticket alone.
+    let (hostname, instance, service, port, txt) =
+        rusty_esp_arduino::host::advertised().expect("the board was asked to advertise");
+    assert_eq!(service, "_mata-oem-sidecar._tcp.local.");
+    assert_eq!(hostname, "test", "the model's last segment, as a DNS label");
+    assert_eq!(instance, "Janus device");
+    assert_eq!(port, mesh::port().expect("a port"), "the iroh UDP port");
+    let keys: Vec<&str> = txt.iter().map(|(k, _)| k.as_str()).collect();
+    for k in ["kind", "protocol", "iroh_node_id", "iroh_direct", "did"] {
+        assert!(keys.contains(&k), "the TXT record needs {k}: {keys:?}");
+    }
+    assert_eq!(
+        txt.iter().find(|(k, _)| k == "kind").map(|(_, v)| v.as_str()),
+        Some("oem_sidecar"),
+        "what makes the pair client render it as a box"
+    );
+
     let ticket = mesh::ticket().expect("a ticket");
     assert!(mesh::port().is_some());
     assert!(

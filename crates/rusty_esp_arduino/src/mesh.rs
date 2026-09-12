@@ -209,6 +209,35 @@ impl MediaSource for LatestFrames {
     }
 }
 
+/// The mDNS instance name a Janus device publishes under. The pair client
+/// renders a device by its TXT `kind=`, not by this, so it is a label for a
+/// person reading a network browser.
+const SIDECAR_INSTANCE: &str = "Janus device";
+
+/// An mDNS hostname from a model: `janus/mesh-cam` is a model, `mesh-cam` is
+/// a hostname. Everything that is not a letter, a digit or a hyphen becomes a
+/// hyphen, because a label that breaks the rules is one a resolver drops.
+fn mdns_hostname(model: &str) -> String {
+    let tail = model.rsplit('/').next().unwrap_or(model);
+    let mut out: String = tail
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    out.truncate(63); // one DNS label
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "janus".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 /// The codec tag a subscriber sends to mean "whatever this device makes":
 /// `rusty_esp_iroh_core::media::Subscribe` documents it as the device's
 /// default, and every source in the family honours it. A subscriber that has
@@ -270,6 +299,7 @@ fn try_begin(config: Config) -> Result<()> {
     // serves it was never registered.
     board::with(|b| b.prepare_async(ASYNC_MAX_FDS))?;
     let maker = identity::maker();
+    let model_for_host = config.model.clone();
     let mut ips: Vec<IpAddr> = Vec::new();
     if let Some(ip) = board::with(|b| Ok(b.local_ip()))? {
         ips.push(ip);
@@ -324,7 +354,8 @@ fn try_begin(config: Config) -> Result<()> {
         }
     });
 
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<(String, String, u16)>>();
+    type Ready = (String, String, u16, Vec<(String, String)>);
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<Ready>>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let mut builder = thread::Builder::new().name("janus-mesh".into());
     if let Some(bytes) = MESH_STACK_BYTES {
@@ -386,7 +417,14 @@ fn try_begin(config: Config) -> Result<()> {
                     }
                 };
                 let _ = node.refresh_ticket(&ips);
-                let _ = ready_tx.send(Ok((node.did().to_owned(), node.ticket_text(), node.port())));
+                // The TXT record travels back with everything else: the node
+                // lives on this thread, the board does not.
+                let _ = ready_tx.send(Ok((
+                    node.did().to_owned(),
+                    node.ticket_text(),
+                    node.port(),
+                    node.sidecar_txt(&ips),
+                )));
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     match stop_rx.try_recv() {
@@ -399,9 +437,24 @@ fn try_begin(config: Config) -> Result<()> {
         })
         .map_err(|e| Error::Io(format!("mesh: thread: {e}")))?;
 
-    let (did, ticket, port) = ready_rx
+    let (did, ticket, port, txt) = ready_rx
         .recv_timeout(Duration::from_secs(30))
         .map_err(|_| Error::Io("mesh: the node did not come up within 30 s".into()))??;
+    // Publish it. A board that cannot answers Ok and the device is reachable
+    // by ticket alone; a board that can is one a pair client will list.
+    let hostname = mdns_hostname(&model_for_host);
+    if let Err(e) = board::with(|b| {
+        b.advertise(
+            &hostname,
+            SIDECAR_INSTANCE,
+            rusty_esp_iroh_core::sidecar::SERVICE_TYPE,
+            port,
+            &txt,
+        )
+    }) {
+        // Not fatal: the node is up and serving, it is only unannounced.
+        record(Error::Io(format!("mesh: advertise: {e:?}")));
+    }
     *MESH.lock().unwrap_or_else(PoisonError::into_inner) = Some(State {
         shared,
         did,
