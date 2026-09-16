@@ -102,6 +102,16 @@ pub fn advertised() -> Option<Advert> {
 /// ask is recorded and [`async_prepared`] hands it to a test.
 static ASYNC_PREPARED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
+/// How many times the laptop board was told its running image is good.
+static OTA_RUNNING_VALID: AtomicUsize = AtomicUsize::new(0);
+
+/// How many times [`Board::ota_running_valid`] was called: once, after the
+/// endpoint came up, on a board that handed over a slot.
+#[must_use]
+pub fn ota_running_valid_calls() -> usize {
+    OTA_RUNNING_VALID.load(Ordering::Relaxed)
+}
+
 /// What the laptop board was asked to prepare for, oldest first.
 #[must_use]
 pub fn async_prepared() -> Vec<usize> {
@@ -634,6 +644,25 @@ impl Board for HostBoard {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(txt.to_vec());
+        Ok(())
+    }
+
+    #[cfg(feature = "mesh")]
+    fn ota_sink(&mut self) -> Option<Box<dyn rusty_esp_iroh_core::ota::OtaSink + Send>> {
+        // Two 1 MiB slots in memory, the running one holding this crate's
+        // own version string -- the iroh package's host model of `esp-ota`.
+        let running = rusty_esp_iroh_core::ota::MemorySlots::image(
+            concat!("rusty_esp_arduino ", env!("CARGO_PKG_VERSION")),
+            b"laptop",
+        );
+        Some(Box::new(rusty_esp_iroh_core::ota::MemorySlots::new(
+            running,
+            1 << 20,
+        )))
+    }
+
+    fn ota_running_valid(&mut self) -> Result<()> {
+        OTA_RUNNING_VALID.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 

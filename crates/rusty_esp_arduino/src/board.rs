@@ -120,6 +120,23 @@ pub trait Board: Send {
         Ok(())
     }
 
+    /// The inactive slot a signed update is written to, if this board has
+    /// one: `esp-ota`'s next update partition on a chip, two buffers on the
+    /// laptop. `None` is a board with a single app partition, and the
+    /// manifest then does not promise `ota`. Asked only when the device has
+    /// a maker to trust, because without one no image can be accepted.
+    #[cfg(feature = "mesh")]
+    fn ota_sink(&mut self) -> Option<Box<dyn rusty_esp_iroh_core::ota::OtaSink + Send>> {
+        None
+    }
+
+    /// The running image is good: cancel a pending bootloader rollback.
+    /// Called once the endpoint is up, so that an image which boots but
+    /// never reaches the mesh is the one the bootloader drops.
+    fn ota_running_valid(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Prepare the platform for the async runtime [`mesh::begin`] is about
     /// to build, and do it once. On ESP-IDF tokio's I/O driver opens an
     /// `eventfd`, which is served by a VFS that must be registered first:

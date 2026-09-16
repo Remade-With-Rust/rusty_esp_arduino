@@ -13,8 +13,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use rusty_esp_core::capability::{Chip, Declared, Manifest};
+use rusty_esp_core::capability::{Capability, Chip, Declared, Manifest};
 use rusty_esp_iroh_core::media::{FLAG_KEY, PacketHeader, Subscribe};
+pub use rusty_esp_iroh_core::ota::OtaSink;
 use rusty_esp_iroh_host::mjpeg::CODEC_MJPEG;
 use rusty_esp_iroh_host::{Extras, MediaSource, Node, NodeConfig, NodeIdentity};
 
@@ -161,6 +162,9 @@ struct Shared {
     readvertise: Mutex<Option<Vec<(String, String)>>>,
     /// Whether the node was adopted at the last poll, to notice the change.
     adopted_seen: AtomicU32,
+    /// The firmware string of an update the node accepted into the boot
+    /// slot, copied out of the node by the mesh thread.
+    last_ota: Mutex<Option<String>>,
 }
 
 /// Which channel a subscriber joined.
@@ -319,6 +323,28 @@ fn try_begin(config: Config) -> Result<()> {
     // serves it was never registered.
     board::with(|b| b.prepare_async(ASYNC_MAX_FDS))?;
     let maker = identity::maker();
+    // Signed updates take a maker to trust and a slot to write, together.
+    // Without the maker every image is refused by name (`NoMaker`), so the
+    // slot is not even asked for; without the slot the manifest does not
+    // promise `ota`, and the node refuses at the manifest instead of at the
+    // flash. Until 2026-09-16 the facade handed the node neither.
+    let ota_sink = if maker.is_some() {
+        board::with(|b| Ok(b.ota_sink()))?
+    } else {
+        None
+    };
+    let ota_armed = ota_sink.is_some();
+    let mut config = config;
+    if ota_armed
+        && !config
+            .declared
+            .iter()
+            .any(|d| d.capability == Capability::Ota)
+    {
+        config
+            .declared
+            .push(Declared::available(Capability::Ota, "rusty_esp_iroh"));
+    }
     let model_for_host = config.model.clone();
     let mut ips: Vec<IpAddr> = Vec::new();
     if let Some(ip) = board::with(|b| Ok(b.local_ip()))? {
@@ -339,6 +365,7 @@ fn try_begin(config: Config) -> Result<()> {
         node_subscribers: AtomicU32::new(0),
         readvertise: Mutex::new(None),
         adopted_seen: AtomicU32::new(0),
+        last_ota: Mutex::new(None),
     });
     let factory_shared = Arc::clone(&shared);
     let counter_shared = Arc::clone(&shared);
@@ -423,7 +450,7 @@ fn try_begin(config: Config) -> Result<()> {
                 };
                 let extras = Extras {
                     maker_did: maker,
-                    ota: None,
+                    ota: ota_sink,
                     neighbours: None,
                 };
                 let node = match Node::bind_with(
@@ -453,6 +480,13 @@ fn try_begin(config: Config) -> Result<()> {
                     node.endpoint().id().to_string(),
                 )));
                 let ips_for_txt = ips.clone();
+                // Only a CHANGE re-advertises. A device that boots already
+                // adopted composed its boot record from the pin, and the
+                // first poll must not replace it with itself (it did, at
+                // 3.4 s, on the XIAO on 2026-09-16).
+                counter_shared
+                    .adopted_seen
+                    .store(u32::from(node.is_adopted()), Ordering::Relaxed);
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     // What the NODE did, beside what the sketch pushed. A
@@ -486,6 +520,18 @@ fn try_begin(config: Config) -> Result<()> {
                             .unwrap_or_else(PoisonError::into_inner) =
                             Some(node.sidecar_txt(&ips_for_txt));
                     }
+                    // An accepted update: the node has written and verified
+                    // it and told the owner so. The sketch reads this and
+                    // restarts; the node itself never reboots anything.
+                    if let Some(fw) = node.last_ota() {
+                        let mut slot = counter_shared
+                            .last_ota
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
+                        if slot.as_deref() != Some(fw.as_str()) {
+                            *slot = Some(fw);
+                        }
+                    }
                     match stop_rx.try_recv() {
                         Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
                         Err(mpsc::TryRecvError::Empty) => {}
@@ -513,6 +559,15 @@ fn try_begin(config: Config) -> Result<()> {
     }) {
         // Not fatal: the node is up and serving, it is only unannounced.
         record(Error::Io(format!("mesh: advertise: {e:?}")));
+    }
+    // The endpoint is up, so the running image is good: a bootloader with a
+    // rollback pending cancels it here, and an image that boots but never
+    // reaches the mesh is the one it drops. Only a board that handed over a
+    // slot has such a bootloader to tell.
+    if ota_armed {
+        if let Err(e) = board::with(|b| b.ota_running_valid()) {
+            record(Error::Io(format!("mesh: ota_running_valid: {e:?}")));
+        }
     }
     *MESH.lock().unwrap_or_else(PoisonError::into_inner) = Some(State {
         shared,
@@ -645,6 +700,22 @@ pub fn did() -> Option<String> {
 #[must_use]
 pub fn ticket() -> Option<String> {
     with_state(|s| s.ticket.clone())
+}
+
+/// The firmware string of an update the node accepted into the boot slot,
+/// once there is one: the bytes are written and verified, the owner was told
+/// `Committed`, and the bootloader will try the new image next. This is the
+/// sketch's cue to restart; the facade never restarts anything itself.
+#[must_use]
+pub fn last_ota() -> Option<String> {
+    with_state(|s| {
+        s.shared
+            .last_ota
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    })
+    .flatten()
 }
 
 /// The node's endpoint id, once `begin` succeeded: what a ticket carries and
