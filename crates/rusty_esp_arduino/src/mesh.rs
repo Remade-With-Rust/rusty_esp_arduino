@@ -155,6 +155,12 @@ struct Shared {
     node_sent: AtomicU32,
     node_send_errors: AtomicU32,
     node_subscribers: AtomicU32,
+    /// A TXT record the node wants re-advertised, set by the mesh thread when
+    /// the owner pin changes and taken by `service()` on the sketch's thread,
+    /// so the board is only ever touched from one thread.
+    readvertise: Mutex<Option<Vec<(String, String)>>>,
+    /// Whether the node was adopted at the last poll, to notice the change.
+    adopted_seen: AtomicU32,
 }
 
 /// Which channel a subscriber joined.
@@ -271,6 +277,7 @@ struct State {
     did: String,
     ticket: String,
     port: u16,
+    endpoint_id: String,
     stop: mpsc::Sender<()>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -330,6 +337,8 @@ fn try_begin(config: Config) -> Result<()> {
         node_sent: AtomicU32::new(0),
         node_send_errors: AtomicU32::new(0),
         node_subscribers: AtomicU32::new(0),
+        readvertise: Mutex::new(None),
+        adopted_seen: AtomicU32::new(0),
     });
     let factory_shared = Arc::clone(&shared);
     let counter_shared = Arc::clone(&shared);
@@ -371,7 +380,7 @@ fn try_begin(config: Config) -> Result<()> {
         }
     });
 
-    type Ready = (String, String, u16, Vec<(String, String)>);
+    type Ready = (String, String, u16, Vec<(String, String)>, String);
     let (ready_tx, ready_rx) = mpsc::channel::<Result<Ready>>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let mut builder = thread::Builder::new().name("janus-mesh".into());
@@ -441,7 +450,9 @@ fn try_begin(config: Config) -> Result<()> {
                     node.ticket_text(),
                     node.port(),
                     node.sidecar_txt(&ips),
+                    node.endpoint().id().to_string(),
                 )));
+                let ips_for_txt = ips.clone();
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     // What the NODE did, beside what the sketch pushed. A
@@ -463,6 +474,18 @@ fn try_begin(config: Config) -> Result<()> {
                             Ordering::Relaxed,
                         );
                     }
+                    // The advertisement has to follow the pin. When adoption
+                    // flips, recompute the record here -- the node is on this
+                    // thread -- and leave it for `service()` to hand to the
+                    // board on the sketch's thread.
+                    let adopted_now = u32::from(node.is_adopted());
+                    if adopted_now != counter_shared.adopted_seen.swap(adopted_now, Ordering::Relaxed) {
+                        *counter_shared
+                            .readvertise
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner) =
+                            Some(node.sidecar_txt(&ips_for_txt));
+                    }
                     match stop_rx.try_recv() {
                         Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
                         Err(mpsc::TryRecvError::Empty) => {}
@@ -473,7 +496,7 @@ fn try_begin(config: Config) -> Result<()> {
         })
         .map_err(|e| Error::Io(format!("mesh: thread: {e}")))?;
 
-    let (did, ticket, port, txt) = ready_rx
+    let (did, ticket, port, txt, endpoint_id) = ready_rx
         .recv_timeout(Duration::from_secs(30))
         .map_err(|_| Error::Io("mesh: the node did not come up within 30 s".into()))??;
     // Publish it. A board that cannot answers Ok and the device is reachable
@@ -496,6 +519,7 @@ fn try_begin(config: Config) -> Result<()> {
         did,
         ticket,
         port,
+        endpoint_id,
         stop: stop_tx,
         thread: Some(thread),
     });
@@ -570,9 +594,27 @@ pub fn push_telemetry(reading: &[u8]) -> bool {
 }
 
 /// Give the node its turn. The node runs on its own thread, so this is the
-/// sketch's place to read what happened; it returns the counters.
+/// sketch's place to read what happened; it returns the counters. It is also
+/// where a changed advertisement reaches the board: the mesh thread queues
+/// the record when the owner pin changes, and this call, on the sketch's
+/// thread, is the one that publishes it -- one thread owns the board.
 #[must_use]
 pub fn service() -> Stats {
+    let pending: Option<Vec<(String, String)>> = with_state(|s| {
+        s.shared
+            .readvertise
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    })
+    .flatten();
+    if let Some(txt) = pending {
+        if let Err(e) = board::with(|b| {
+            b.advertise_txt(rusty_esp_iroh_core::sidecar::SERVICE_TYPE, &txt[..])
+        }) {
+            record(Error::Io(format!("mesh: advertise_txt: {e:?}")));
+        }
+    }
     with_state(|s| Stats {
         subscribers: s.shared.subscribers.load(Ordering::Relaxed),
         frames: u64::from(s.shared.frames.load(Ordering::Relaxed)),
@@ -603,6 +645,14 @@ pub fn did() -> Option<String> {
 #[must_use]
 pub fn ticket() -> Option<String> {
     with_state(|s| s.ticket.clone())
+}
+
+/// The node's endpoint id, once `begin` succeeded: what a ticket carries and
+/// what persists across a reflash. The sketch prints it itself so an offline
+/// run reads a line the sketch owns, not one borrowed from a library's log.
+#[must_use]
+pub fn endpoint_id() -> Option<String> {
+    with_state(|s| s.endpoint_id.clone())
 }
 
 /// The UDP port the endpoint bound.

@@ -12,6 +12,9 @@ use rusty_esp_arduino::{board, identity, last_error, mesh};
 use rusty_esp_core::capability::{Capability, Chip, Declared};
 use rusty_esp_core::time::Micros;
 use rusty_esp_iroh_core::media::Subscribe;
+use rusty_esp_iroh_core::mid::adoption::{AdoptionFields, CapList};
+use rusty_esp_iroh_core::mid::key::DeviceKey;
+use rusty_esp_iroh_core::rpc::{Request, Response};
 use rusty_esp_iroh_core::ticket::Ticket;
 use rusty_esp_iroh_host::Client;
 use rusty_esp_iroh_host::client::endpoint_addr;
@@ -80,6 +83,13 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
 
     let ticket = mesh::ticket().expect("a ticket");
     assert!(mesh::port().is_some());
+    // The endpoint id is the facade's to report, and it is the key the ticket
+    // carries -- so a sketch prints a line it owns, not one borrowed from a
+    // library's log (which a log level silenced once, for a whole trip).
+    let endpoint_id = mesh::endpoint_id().expect("an endpoint id");
+    let parsed = Ticket::parse_text(&ticket).unwrap();
+    let hex: String = parsed.endpoint_id.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(endpoint_id, hex, "the endpoint id is the key inside the ticket");
     assert!(
         !mesh::begin(mesh::Config::new("janus/test", Chip::Esp32S3)),
         "twice is refused"
@@ -160,6 +170,64 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
     let stats = mesh::service();
     assert!(stats.subscribers >= 1, "{stats:?}");
     assert!(stats.frames >= 8, "{stats:?}");
+
+    // Adoption must change what the device advertises. Before this, the
+    // record was composed once at boot: a device that had an owner went on
+    // advertising `pair_state=open`, and a home computer would have offered
+    // to claim it (measured on the XIAO, 2026-09-12).
+    assert!(
+        rusty_esp_arduino::host::advertised_updates().is_empty(),
+        "nothing to re-advertise before adoption"
+    );
+    let owner = DeviceKey::from_seed_for_tests("owner", "hub");
+    let owner_did = {
+        let mut buf = [0u8; 64];
+        String::from(owner.did().write(&mut buf).unwrap())
+    };
+    let owner_did_obj = owner.did();
+    let caps = ["media:subscribe@*", "telemetry:read@*"];
+    let fields = AdoptionFields {
+        device_did: &did,
+        owner_did: &owner_did,
+        owner_genesis_pubkey: owner_did_obj.pubkey(),
+        hub_endpoint_id: &[0u8; 32],
+        hub_relay: "",
+        hub_host: "",
+        caps: CapList::Slice(&caps),
+        roster_version: 1,
+        issued_at: 1_700_000_000,
+        expires_at: 0,
+    };
+    let mut adoption = vec![0u8; 1024];
+    let n = fields.sign_into(&owner, &mut adoption).unwrap();
+    adoption.truncate(n);
+    let rt2 = tokio::runtime::Runtime::new().unwrap();
+    let adopted = rt2.block_on(async {
+        let owner_client = Client::bind(None, Some(owner), false).await.unwrap();
+        let t = Ticket::parse_text(&ticket).unwrap();
+        let addr = endpoint_addr(&t).unwrap();
+        let r = owner_client.rpc(&addr, &did, Request::Adopt(adoption)).await.unwrap();
+        owner_client.close().await;
+        r
+    });
+    assert!(matches!(adopted, Response::Adopted { .. }), "{adopted:?}");
+    // The mesh thread notices on its next poll; the sketch's next `service`
+    // call hands the new record to the board.
+    let mut updates = Vec::new();
+    for _ in 0..40 {
+        let _ = mesh::service();
+        updates = rusty_esp_arduino::host::advertised_updates();
+        if !updates.is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(updates.len(), 1, "one replacement record after adoption");
+    let pair = updates[0]
+        .iter()
+        .find(|(k, _)| k == "pair_state")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(pair, Some("paired"), "the advertisement follows the pin: {:?}", updates[0]);
 
     mesh::end();
     assert!(!mesh::begun());

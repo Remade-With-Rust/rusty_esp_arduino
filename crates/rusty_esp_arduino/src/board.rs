@@ -111,6 +111,15 @@ pub trait Board: Send {
         Ok(())
     }
 
+    /// Replace the TXT record of the service [`Board::advertise`] published,
+    /// because something in it changed -- adoption, above all: a device that
+    /// has an owner must stop advertising itself as free to claim, and until
+    /// 2026-09-12 it did not, because the record was composed once at boot.
+    /// A board that never advertised has nothing to update and answers `Ok`.
+    fn advertise_txt(&mut self, _service_type: &str, _txt: &[(String, String)]) -> Result<()> {
+        Ok(())
+    }
+
     /// Prepare the platform for the async runtime [`mesh::begin`] is about
     /// to build, and do it once. On ESP-IDF tokio's I/O driver opens an
     /// `eventfd`, which is served by a VFS that must be registered first:

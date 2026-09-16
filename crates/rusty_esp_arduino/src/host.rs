@@ -73,6 +73,20 @@ pub struct HostBoard {
 type Advert = (String, String, String, u16, Vec<(String, String)>);
 static ADVERTISED: Mutex<Option<Advert>> = Mutex::new(None);
 
+/// Every TXT update the laptop board was asked for after publishing, oldest
+/// first. Adoption must change the record, and [`advertised_updates`] is how
+/// a test proves it did.
+static ADVERTISED_UPDATES: Mutex<Vec<Vec<(String, String)>>> = Mutex::new(Vec::new());
+
+/// The TXT updates the laptop board was asked for, oldest first.
+#[must_use]
+pub fn advertised_updates() -> Vec<Vec<(String, String)>> {
+    ADVERTISED_UPDATES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
 /// What the laptop board was last asked to publish, if anything.
 #[must_use]
 pub fn advertised() -> Option<Advert> {
@@ -612,6 +626,14 @@ impl Board for HostBoard {
             port,
             txt.to_vec(),
         ));
+        Ok(())
+    }
+
+    fn advertise_txt(&mut self, _service_type: &str, txt: &[(String, String)]) -> Result<()> {
+        ADVERTISED_UPDATES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(txt.to_vec());
         Ok(())
     }
 
