@@ -1,5 +1,6 @@
 //! The microphone, Arduino-shaped: `begin` once, `read` in the loop.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use rusty_esp_core::pcm::{PcmFormat, SampleFormat};
@@ -61,6 +62,10 @@ impl Config {
 
 static CONFIG: Mutex<Option<Config>> = Mutex::new(None);
 
+/// Blocks `read` has handed out since boot (32 bits: Xtensa has no 64-bit
+/// atomics, and 2^32 blocks is 2.7 years at 50 a second).
+static BLOCKS: AtomicU32 = AtomicU32::new(0);
+
 /// Start the microphone with `config`. `false` (and [`crate::last_error`])
 /// when the board refuses or none is installed.
 pub fn begin(config: Config) -> bool {
@@ -74,7 +79,20 @@ pub fn begin(config: Config) -> bool {
 /// The next block, if one is ready. `None` with no error recorded means "not
 /// yet"; `None` with [`crate::last_error`] set means something is wrong.
 pub fn read() -> Option<Pcm> {
-    error::some(board::with(|b| b.mic_read()))
+    let pcm = error::some(board::with(|b| b.mic_read()));
+    if pcm.is_some() {
+        BLOCKS.fetch_add(1, Ordering::Relaxed);
+    }
+    pcm
+}
+
+/// Blocks `read` has handed out since boot: the board's own count of what
+/// the microphone delivered, for a periodic serial line, so the rate can be
+/// read with no receiver on the network (a `push` counts only what a sender
+/// took, and a bench with no PCM destination pushes nothing).
+#[must_use]
+pub fn blocks() -> u32 {
+    BLOCKS.load(Ordering::Relaxed)
 }
 
 /// The configuration `begin` was given, once it succeeded.

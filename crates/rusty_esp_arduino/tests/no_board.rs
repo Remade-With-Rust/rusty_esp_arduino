@@ -33,6 +33,7 @@ fn every_call_is_refused_with_no_board_and_the_reason_is_one_call_away() {
     assert_eq!(last_error(), Some(Error::NotBegun("camera")));
     assert!(mic::read().is_none());
     assert_eq!(last_error(), Some(Error::NotBegun("microphone")));
+    assert_eq!(mic::blocks(), 0, "nothing was handed out by a board that has not begun");
     let frame = Jpeg {
         bytes: vec![0xFF, 0xD8, 0xFF, 0xD9],
         width: 1,
