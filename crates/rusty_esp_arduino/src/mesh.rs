@@ -67,6 +67,11 @@ pub struct Config {
     pub declared: Vec<Declared>,
     /// Relay and pkarr discovery (the PSRAM tier); off is LAN-direct.
     pub relay: bool,
+    /// Media subscribers served at once; one more is refused and counted.
+    /// `0` is no cap. A subscription costs 17,000-19,088 B of internal RAM
+    /// on the XIAO ESP32-S3, which served two and panicked at four
+    /// (2026-09-16); two is the ESP-IDF default, none is the laptop's.
+    pub max_subscribers: u32,
 }
 
 impl Config {
@@ -79,6 +84,7 @@ impl Config {
             chip,
             declared: Vec::new(),
             relay: false,
+            max_subscribers: if cfg!(target_os = "espidf") { 2 } else { 0 },
         }
     }
 
@@ -93,6 +99,14 @@ impl Config {
     #[must_use]
     pub fn with_relay(mut self, relay: bool) -> Self {
         self.relay = relay;
+        self
+    }
+
+    /// How many media subscribers to serve at once (`0`: no cap). Set it
+    /// from what the board measured, not from what it should manage.
+    #[must_use]
+    pub fn with_max_subscribers(mut self, max: u32) -> Self {
+        self.max_subscribers = max;
         self
     }
 }
@@ -447,6 +461,7 @@ fn try_begin(config: Config) -> Result<()> {
                     relay: config.relay,
                     model: config.model.clone(),
                     firmware: config.firmware.clone(),
+                    max_media_subscribers: config.max_subscribers,
                 };
                 let extras = Extras {
                     maker_did: maker,

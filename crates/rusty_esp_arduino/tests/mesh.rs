@@ -45,7 +45,10 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
     let maker_did = maker.did().to_did_string();
     assert!(identity::begin(Some(&maker_did)), "{:?}", last_error());
     let did = identity::did().unwrap();
+    // A cap of one on the laptop, so the test can see a refusal: the board
+    // sets its own number from what it measured.
     let config = mesh::Config::new("janus/test", Chip::Esp32S3)
+        .with_max_subscribers(1)
         .declare(Declared::available(
             Capability::VideoMjpeg,
             "rusty_esp_video",
@@ -179,6 +182,22 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
     let stats = mesh::service();
     assert!(stats.subscribers >= 1, "{stats:?}");
     assert!(stats.frames >= 8, "{stats:?}");
+
+    // Two at once against a cap of one: one served, one refused, and the
+    // node still answers.
+    let rt3 = tokio::runtime::Runtime::new().unwrap();
+    let flood = rt3.block_on(async {
+        let c = Client::bind(None, None, false).await.unwrap();
+        let t = Ticket::parse_text(&ticket).unwrap();
+        let a = endpoint_addr(&t).unwrap();
+        let f = c.flood(&a, 2, Duration::from_millis(400)).await;
+        let ping = matches!(c.rpc_anonymous(&a, Request::Ping).await, Ok(Response::Pong));
+        c.close().await;
+        (f, ping)
+    });
+    assert_eq!(flood.0.ok, 1, "{flood:?}");
+    assert_eq!(flood.0.failed, 1, "{flood:?}");
+    assert!(flood.1, "the node answers a ping with one served and one refused");
 
     // Adoption must change what the device advertises. Before this, the
     // record was composed once at boot: a device that had an owner went on
