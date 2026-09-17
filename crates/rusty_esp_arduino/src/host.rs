@@ -105,6 +105,25 @@ static ASYNC_PREPARED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 /// How many times the laptop board was told its running image is good.
 static OTA_RUNNING_VALID: AtomicUsize = AtomicUsize::new(0);
 
+/// The timeout the laptop board's liveness watchdog was armed with, if any.
+static LIVENESS_ARMED: Mutex<Option<u32>> = Mutex::new(None);
+/// Loop passes the laptop board was told about.
+static LIVENESS_FEEDS: AtomicUsize = AtomicUsize::new(0);
+/// Boots the laptop board has counted (one per `run`).
+static BOOTS: AtomicUsize = AtomicUsize::new(0);
+
+/// The timeout [`Board::liveness_begin`] was called with, if it was.
+#[must_use]
+pub fn liveness_armed() -> Option<u32> {
+    *LIVENESS_ARMED.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// How many times [`Board::liveness_feed`] was called: one per loop pass.
+#[must_use]
+pub fn liveness_feeds() -> usize {
+    LIVENESS_FEEDS.load(Ordering::Relaxed)
+}
+
 /// How many times [`Board::ota_running_valid`] was called: once, after the
 /// endpoint came up, on a board that handed over a slot.
 #[must_use]
@@ -664,6 +683,26 @@ impl Board for HostBoard {
     fn ota_running_valid(&mut self) -> Result<()> {
         OTA_RUNNING_VALID.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn liveness_begin(&mut self, timeout_s: u32) -> Result<()> {
+        *LIVENESS_ARMED.lock().unwrap_or_else(PoisonError::into_inner) = Some(timeout_s);
+        Ok(())
+    }
+
+    fn liveness_feed(&mut self) -> Result<()> {
+        LIVENESS_FEEDS.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn boot_record(&mut self) -> Result<Option<crate::board::BootRecord>> {
+        // A laptop boots on power, every time, and never crashes into a run.
+        let boots = BOOTS.fetch_add(1, Ordering::Relaxed) + 1;
+        Ok(Some(crate::board::BootRecord {
+            reason: crate::board::ResetReason::PowerOn,
+            boots: u32::try_from(boots).unwrap_or(u32::MAX),
+            crashes: 0,
+        }))
     }
 
     fn prepare_async(&mut self, max_fds: usize) -> Result<()> {

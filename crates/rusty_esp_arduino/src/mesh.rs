@@ -72,6 +72,10 @@ pub struct Config {
     /// on the XIAO ESP32-S3, which served two and panicked at four
     /// (2026-09-16); two is the ESP-IDF default, none is the laptop's.
     pub max_subscribers: u32,
+    /// This boot's record, for the advertisement and the sidecar status
+    /// (`boots=`, `crashes=`, `last_reset=`). Left `None`, `begin` takes
+    /// what `sketch::run` read from the board.
+    pub boot: Option<crate::board::BootRecord>,
 }
 
 impl Config {
@@ -85,6 +89,7 @@ impl Config {
             declared: Vec::new(),
             relay: false,
             max_subscribers: if cfg!(target_os = "espidf") { 2 } else { 0 },
+            boot: None,
         }
     }
 
@@ -349,6 +354,9 @@ fn try_begin(config: Config) -> Result<()> {
     };
     let ota_armed = ota_sink.is_some();
     let mut config = config;
+    if config.boot.is_none() {
+        config.boot = crate::sketch::boot_record();
+    }
     if ota_armed
         && !config
             .declared
@@ -462,6 +470,11 @@ fn try_begin(config: Config) -> Result<()> {
                     model: config.model.clone(),
                     firmware: config.firmware.clone(),
                     max_media_subscribers: config.max_subscribers,
+                    boot: config.boot.map(|b| rusty_esp_iroh_host::BootStats {
+                        boots: b.boots,
+                        crashes: b.crashes,
+                        last_reset: b.reason.wire_tag(),
+                    }),
                 };
                 let extras = Extras {
                     maker_did: maker,

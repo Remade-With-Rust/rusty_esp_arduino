@@ -50,6 +50,70 @@ impl Pcm {
     }
 }
 
+/// Why a boot happened, as the board's reset logic names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResetReason {
+    /// Power applied.
+    PowerOn,
+    /// The reset pin, or a USB reset.
+    External,
+    /// A software restart the sketch asked for.
+    Software,
+    /// The panic handler.
+    Panic,
+    /// The task watchdog: a loop pass that never came back.
+    TaskWatchdog,
+    /// The interrupt watchdog, or another hardware watchdog.
+    InterruptWatchdog,
+    /// The supply sagged.
+    Brownout,
+    /// A wake from deep sleep.
+    DeepSleep,
+    /// Something this list does not name.
+    Other,
+}
+
+impl ResetReason {
+    /// The word a record carries.
+    #[must_use]
+    pub const fn wire_tag(self) -> &'static str {
+        match self {
+            ResetReason::PowerOn => "power-on",
+            ResetReason::External => "external",
+            ResetReason::Software => "software",
+            ResetReason::Panic => "panic",
+            ResetReason::TaskWatchdog => "task-watchdog",
+            ResetReason::InterruptWatchdog => "interrupt-watchdog",
+            ResetReason::Brownout => "brownout",
+            ResetReason::DeepSleep => "deep-sleep",
+            ResetReason::Other => "other",
+        }
+    }
+
+    /// Whether this boot followed a failure rather than a request.
+    #[must_use]
+    pub const fn is_crash(self) -> bool {
+        matches!(
+            self,
+            ResetReason::Panic
+                | ResetReason::TaskWatchdog
+                | ResetReason::InterruptWatchdog
+                | ResetReason::Brownout
+        )
+    }
+}
+
+/// What a board knows about this boot and the ones before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BootRecord {
+    /// Why this boot happened.
+    pub reason: ResetReason,
+    /// Boots counted by the board, this one included.
+    pub boots: u32,
+    /// Boots that followed a failure, this one included if it did.
+    pub crashes: u32,
+}
+
 /// What a board provides. Every method may be called before the matching
 /// `begin`; a board answers `Err(Error::NotBegun(..))` then.
 pub trait Board: Send {
@@ -135,6 +199,27 @@ pub trait Board: Send {
     /// never reaches the mesh is the one the bootloader drops.
     fn ota_running_valid(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    /// Put the sketch's thread on a liveness watchdog: if [`Board::liveness_feed`]
+    /// is not called within about `timeout_s` seconds, the board must reboot
+    /// itself. `sketch::run` arms this before `setup` and feeds it after every
+    /// pass. A board without one answers `Ok` and the loop runs unwatched, as
+    /// the XIAO did on 2026-09-16 when a microphone hang sat silent for 73 s.
+    fn liveness_begin(&mut self, _timeout_s: u32) -> Result<()> {
+        Ok(())
+    }
+
+    /// One pass of the loop completed.
+    fn liveness_feed(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Why this boot happened and how many boots and crashes the board has
+    /// counted, from its own store; read once at the start of `run`. `None`
+    /// on a board that keeps no such record.
+    fn boot_record(&mut self) -> Result<Option<BootRecord>> {
+        Ok(None)
     }
 
     /// Prepare the platform for the async runtime [`mesh::begin`] is about
