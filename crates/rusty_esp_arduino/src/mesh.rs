@@ -52,6 +52,11 @@ pub const CODEC_PCM: [u8; 4] = *b"pcm ";
 /// the transport (a `rusty_esp_signal_core::radar::presence::Presence`
 /// today), the way the bridge already carries a neighbour's telemetry.
 pub const CODEC_TELEMETRY: [u8; 4] = *b"tlm ";
+/// The W5 CSI stream (espino's RuView plan): every frame the radio
+/// delivered, raw I/Q, each packet one
+/// `rusty_esp_signal_core::radar::csi_stream::Sample` -- what a LAN
+/// subscriber records in the oracles' own fixture format.
+pub const CODEC_CSI: [u8; 4] = *b"csi ";
 
 /// What the node advertises: the capability manifest the home computer
 /// catalogs, signed by the device key.
@@ -162,6 +167,7 @@ struct Shared {
     video: Channel,
     audio: Channel,
     telemetry: Channel,
+    csi: Channel,
     subscribers: AtomicU32,
     // 32-bit counters on purpose: a 32-bit RISC-V chip (the C6, the C3)
     // has no 64-bit atomic, and the mesh runs on those. `Stats` still
@@ -170,6 +176,7 @@ struct Shared {
     frames: AtomicU32,
     blocks: AtomicU32,
     readings: AtomicU32,
+    samples: AtomicU32,
     /// The node's own counters, copied here every 100 ms by the mesh thread
     /// so the sketch can read them without holding the node.
     node_sent: AtomicU32,
@@ -192,6 +199,7 @@ enum Which {
     Video,
     Audio,
     Telemetry,
+    Csi,
 }
 
 /// One subscriber's view of a channel: every frame pushed after it joined,
@@ -210,6 +218,7 @@ impl MediaSource for LatestFrames {
             Which::Video => &shared.video,
             Which::Audio => &shared.audio,
             Which::Telemetry => &shared.telemetry,
+            Which::Csi => &shared.csi,
         };
         let mut g = ch.slot.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
@@ -318,6 +327,8 @@ pub struct Stats {
     pub blocks: u64,
     /// Telemetry readings pushed.
     pub readings: u64,
+    /// CSI samples pushed (the W5 stream).
+    pub samples: u64,
     /// Media packets the **node** put on the wire, which is not the same
     /// number as the frames the sketch pushed: a subscriber takes the latest
     /// frame, and a device with no subscriber sends nothing at all.
@@ -378,10 +389,12 @@ fn try_begin(config: Config) -> Result<()> {
         video: Channel::new(CODEC_MJPEG),
         audio: Channel::new(CODEC_PCM),
         telemetry: Channel::new(CODEC_TELEMETRY),
+        csi: Channel::new(CODEC_CSI),
         subscribers: AtomicU32::new(0),
         frames: AtomicU32::new(0),
         blocks: AtomicU32::new(0),
         readings: AtomicU32::new(0),
+        samples: AtomicU32::new(0),
         node_sent: AtomicU32::new(0),
         node_send_errors: AtomicU32::new(0),
         node_subscribers: AtomicU32::new(0),
@@ -397,6 +410,7 @@ fn try_begin(config: Config) -> Result<()> {
             c if c == CODEC_MJPEG => Some(Which::Video),
             c if c == CODEC_PCM => Some(Which::Audio),
             c if c == CODEC_TELEMETRY => Some(Which::Telemetry),
+            c if c == CODEC_CSI => Some(Which::Csi),
             // "The device's default" is what the device is actually making,
             // asked at the moment someone subscribes: the camera if it has
             // pushed a frame, else the microphone, else the sensor. A device
@@ -404,17 +418,15 @@ fn try_begin(config: Config) -> Result<()> {
             // which is where a subscriber should wait for a camera that has
             // not warmed up. C2's first trip received nothing because this
             // arm did not exist (2026-09-11).
-            c if c == CODEC_ANY => Some(
-                if factory_shared.frames.load(Ordering::Relaxed) > 0 {
-                    Which::Video
-                } else if factory_shared.blocks.load(Ordering::Relaxed) > 0 {
-                    Which::Audio
-                } else if factory_shared.readings.load(Ordering::Relaxed) > 0 {
-                    Which::Telemetry
-                } else {
-                    Which::Video
-                },
-            ),
+            c if c == CODEC_ANY => Some(if factory_shared.frames.load(Ordering::Relaxed) > 0 {
+                Which::Video
+            } else if factory_shared.blocks.load(Ordering::Relaxed) > 0 {
+                Which::Audio
+            } else if factory_shared.readings.load(Ordering::Relaxed) > 0 {
+                Which::Telemetry
+            } else {
+                Which::Video
+            }),
             _ => None,
         };
         if let Some(which) = which {
@@ -541,7 +553,11 @@ fn try_begin(config: Config) -> Result<()> {
                     // thread -- and leave it for `service()` to hand to the
                     // board on the sketch's thread.
                     let adopted_now = u32::from(node.is_adopted());
-                    if adopted_now != counter_shared.adopted_seen.swap(adopted_now, Ordering::Relaxed) {
+                    if adopted_now
+                        != counter_shared
+                            .adopted_seen
+                            .swap(adopted_now, Ordering::Relaxed)
+                    {
                         *counter_shared
                             .readvertise
                             .lock()
@@ -570,9 +586,10 @@ fn try_begin(config: Config) -> Result<()> {
         })
         .map_err(|e| Error::Io(format!("mesh: thread: {e}")))?;
 
-    let (did, ticket, port, txt, endpoint_id) = ready_rx
-        .recv_timeout(Duration::from_secs(30))
-        .map_err(|_| Error::Io("mesh: the node did not come up within 30 s".into()))??;
+    let (did, ticket, port, txt, endpoint_id) =
+        ready_rx
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| Error::Io("mesh: the node did not come up within 30 s".into()))??;
     // Publish it. A board that cannot answers Ok and the device is reachable
     // by ticket alone; a board that can is one a pair client will list.
     let hostname = mdns_hostname(&model_for_host);
@@ -676,6 +693,26 @@ pub fn push_telemetry(reading: &[u8]) -> bool {
     }
 }
 
+/// Offer one CSI sample to every subscriber of [`CODEC_CSI`]: the W5
+/// stream. The bytes are opaque to the mesh; encode them with
+/// `rusty_esp_signal_core::radar::csi_stream::Sample::encode`, which is what
+/// a subscriber decodes them with. A subscriber that fell behind gets the
+/// newest, as with every channel here, so a stream at 50 Hz never backs up
+/// into the sketch. `false` before `begin`.
+pub fn push_csi(sample: &[u8]) -> bool {
+    let at = crate::sketch::millis().saturating_mul(1000);
+    match with_state(|s| {
+        s.shared.csi.push(at, sample);
+        s.shared.samples.fetch_add(1, Ordering::Relaxed);
+    }) {
+        Some(()) => true,
+        None => {
+            record(Error::NotBegun("mesh"));
+            false
+        }
+    }
+}
+
 /// Give the node its turn. The node runs on its own thread, so this is the
 /// sketch's place to read what happened; it returns the counters. It is also
 /// where a changed advertisement reaches the board: the mesh thread queues
@@ -692,9 +729,9 @@ pub fn service() -> Stats {
     })
     .flatten();
     if let Some(txt) = pending {
-        if let Err(e) = board::with(|b| {
-            b.advertise_txt(rusty_esp_iroh_core::sidecar::SERVICE_TYPE, &txt[..])
-        }) {
+        if let Err(e) =
+            board::with(|b| b.advertise_txt(rusty_esp_iroh_core::sidecar::SERVICE_TYPE, &txt[..]))
+        {
             record(Error::Io(format!("mesh: advertise_txt: {e:?}")));
         }
     }
@@ -703,6 +740,7 @@ pub fn service() -> Stats {
         frames: u64::from(s.shared.frames.load(Ordering::Relaxed)),
         blocks: u64::from(s.shared.blocks.load(Ordering::Relaxed)),
         readings: u64::from(s.shared.readings.load(Ordering::Relaxed)),
+        samples: u64::from(s.shared.samples.load(Ordering::Relaxed)),
         sent: s.shared.node_sent.load(Ordering::Relaxed),
         send_errors: s.shared.node_send_errors.load(Ordering::Relaxed),
         node_subscribers: s.shared.node_subscribers.load(Ordering::Relaxed),
@@ -712,6 +750,7 @@ pub fn service() -> Stats {
         frames: 0,
         blocks: 0,
         readings: 0,
+        samples: 0,
         sent: 0,
         send_errors: 0,
         node_subscribers: 0,
