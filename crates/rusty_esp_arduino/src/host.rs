@@ -115,7 +115,9 @@ static BOOTS: AtomicUsize = AtomicUsize::new(0);
 /// The timeout [`Board::liveness_begin`] was called with, if it was.
 #[must_use]
 pub fn liveness_armed() -> Option<u32> {
-    *LIVENESS_ARMED.lock().unwrap_or_else(PoisonError::into_inner)
+    *LIVENESS_ARMED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 /// How many times [`Board::liveness_feed`] was called: one per loop pass.
@@ -646,9 +648,7 @@ impl Board for HostBoard {
         port: u16,
         txt: &[(String, String)],
     ) -> Result<()> {
-        *ADVERTISED
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((
+        *ADVERTISED.lock().unwrap_or_else(PoisonError::into_inner) = Some((
             hostname.to_owned(),
             instance.to_owned(),
             service_type.to_owned(),
@@ -686,7 +686,9 @@ impl Board for HostBoard {
     }
 
     fn liveness_begin(&mut self, timeout_s: u32) -> Result<()> {
-        *LIVENESS_ARMED.lock().unwrap_or_else(PoisonError::into_inner) = Some(timeout_s);
+        *LIVENESS_ARMED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(timeout_s);
         Ok(())
     }
 

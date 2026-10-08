@@ -84,7 +84,9 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
         assert!(keys.contains(&k), "the TXT record needs {k}: {keys:?}");
     }
     assert_eq!(
-        txt.iter().find(|(k, _)| k == "kind").map(|(_, v)| v.as_str()),
+        txt.iter()
+            .find(|(k, _)| k == "kind")
+            .map(|(_, v)| v.as_str()),
         Some("oem_sidecar"),
         "what makes the pair client render it as a box"
     );
@@ -100,8 +102,15 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
     // library's log (which a log level silenced once, for a whole trip).
     let endpoint_id = mesh::endpoint_id().expect("an endpoint id");
     let parsed = Ticket::parse_text(&ticket).unwrap();
-    let hex: String = parsed.endpoint_id.iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(endpoint_id, hex, "the endpoint id is the key inside the ticket");
+    let hex: String = parsed
+        .endpoint_id
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        endpoint_id, hex,
+        "the endpoint id is the key inside the ticket"
+    );
     assert!(
         !mesh::begin(mesh::Config::new("janus/test", Chip::Esp32S3)),
         "twice is refused"
@@ -197,7 +206,10 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
     });
     assert_eq!(flood.0.ok, 1, "{flood:?}");
     assert_eq!(flood.0.failed, 1, "{flood:?}");
-    assert!(flood.1, "the node answers a ping with one served and one refused");
+    assert!(
+        flood.1,
+        "the node answers a ping with one served and one refused"
+    );
 
     // Adoption must change what the device advertises. Before this, the
     // record was composed once at boot: a device that had an owner went on
@@ -234,7 +246,10 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
         let owner_client = Client::bind(None, Some(owner), false).await.unwrap();
         let t = Ticket::parse_text(&ticket).unwrap();
         let addr = endpoint_addr(&t).unwrap();
-        let r = owner_client.rpc(&addr, &did, Request::Adopt(adoption)).await.unwrap();
+        let r = owner_client
+            .rpc(&addr, &did, Request::Adopt(adoption))
+            .await
+            .unwrap();
         (r, owner_client, addr)
     });
     assert!(matches!(adopted, Response::Adopted { .. }), "{adopted:?}");
@@ -254,7 +269,12 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
         .iter()
         .find(|(k, _)| k == "pair_state")
         .map(|(_, v)| v.as_str());
-    assert_eq!(pair, Some("paired"), "the advertisement follows the pin: {:?}", updates[0]);
+    assert_eq!(
+        pair,
+        Some("paired"),
+        "the advertisement follows the pin: {:?}",
+        updates[0]
+    );
 
     // A signed update, from the owner, through the same client. The maker
     // signed the image and the device was told at `identity::begin` whom to
@@ -273,7 +293,10 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
     )
     .unwrap();
     let outcome = rt2.block_on(async {
-        let r = owner_client.ota(&addr, &did, &manifest, &image).await.unwrap();
+        let r = owner_client
+            .ota(&addr, &did, &manifest, &image)
+            .await
+            .unwrap();
         owner_client.close().await;
         r
     });
@@ -292,7 +315,11 @@ fn pushed_frames_reach_a_subscriber_under_the_device_did() {
         }
         thread::sleep(Duration::from_millis(50));
     }
-    assert_eq!(last.as_deref(), Some("1.5.0"), "the sketch learns the firmware it will boot into");
+    assert_eq!(
+        last.as_deref(),
+        Some("1.5.0"),
+        "the sketch learns the firmware it will boot into"
+    );
 
     mesh::end();
     assert!(!mesh::begun());

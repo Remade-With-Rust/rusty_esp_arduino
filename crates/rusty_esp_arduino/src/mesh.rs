@@ -404,17 +404,15 @@ fn try_begin(config: Config) -> Result<()> {
             // which is where a subscriber should wait for a camera that has
             // not warmed up. C2's first trip received nothing because this
             // arm did not exist (2026-09-11).
-            c if c == CODEC_ANY => Some(
-                if factory_shared.frames.load(Ordering::Relaxed) > 0 {
-                    Which::Video
-                } else if factory_shared.blocks.load(Ordering::Relaxed) > 0 {
-                    Which::Audio
-                } else if factory_shared.readings.load(Ordering::Relaxed) > 0 {
-                    Which::Telemetry
-                } else {
-                    Which::Video
-                },
-            ),
+            c if c == CODEC_ANY => Some(if factory_shared.frames.load(Ordering::Relaxed) > 0 {
+                Which::Video
+            } else if factory_shared.blocks.load(Ordering::Relaxed) > 0 {
+                Which::Audio
+            } else if factory_shared.readings.load(Ordering::Relaxed) > 0 {
+                Which::Telemetry
+            } else {
+                Which::Video
+            }),
             _ => None,
         };
         if let Some(which) = which {
@@ -541,7 +539,11 @@ fn try_begin(config: Config) -> Result<()> {
                     // thread -- and leave it for `service()` to hand to the
                     // board on the sketch's thread.
                     let adopted_now = u32::from(node.is_adopted());
-                    if adopted_now != counter_shared.adopted_seen.swap(adopted_now, Ordering::Relaxed) {
+                    if adopted_now
+                        != counter_shared
+                            .adopted_seen
+                            .swap(adopted_now, Ordering::Relaxed)
+                    {
                         *counter_shared
                             .readvertise
                             .lock()
@@ -570,9 +572,10 @@ fn try_begin(config: Config) -> Result<()> {
         })
         .map_err(|e| Error::Io(format!("mesh: thread: {e}")))?;
 
-    let (did, ticket, port, txt, endpoint_id) = ready_rx
-        .recv_timeout(Duration::from_secs(30))
-        .map_err(|_| Error::Io("mesh: the node did not come up within 30 s".into()))??;
+    let (did, ticket, port, txt, endpoint_id) =
+        ready_rx
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| Error::Io("mesh: the node did not come up within 30 s".into()))??;
     // Publish it. A board that cannot answers Ok and the device is reachable
     // by ticket alone; a board that can is one a pair client will list.
     let hostname = mdns_hostname(&model_for_host);
@@ -692,9 +695,9 @@ pub fn service() -> Stats {
     })
     .flatten();
     if let Some(txt) = pending {
-        if let Err(e) = board::with(|b| {
-            b.advertise_txt(rusty_esp_iroh_core::sidecar::SERVICE_TYPE, &txt[..])
-        }) {
+        if let Err(e) =
+            board::with(|b| b.advertise_txt(rusty_esp_iroh_core::sidecar::SERVICE_TYPE, &txt[..]))
+        {
             record(Error::Io(format!("mesh: advertise_txt: {e:?}")));
         }
     }
