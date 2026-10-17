@@ -170,6 +170,18 @@ pub fn begun() -> bool {
     did().is_some()
 }
 
+/// Run `f` with the device's identity store and its DID while `begin`'s
+/// store is still held — before the mesh takes it — for the boot-time steps
+/// that write beside the key: an adoption delivered with the settings, for
+/// one. `None` before `begin`, or once the store has been handed over.
+pub fn with_store<R>(f: impl FnOnce(&mut dyn Kv, &str) -> R) -> Option<R> {
+    let mut guard = IDENTITY.lock().unwrap_or_else(PoisonError::into_inner);
+    let state = guard.as_mut()?;
+    let did = state.did.clone();
+    let (kv, _) = state.store.as_mut()?;
+    Some(f(&mut **kv, &did))
+}
+
 /// The store and entropy `begin` took from the board, handed over once.
 #[cfg_attr(not(feature = "mesh"), allow(dead_code))]
 pub(crate) fn take_store() -> Option<(Box<dyn Kv + Send>, Box<dyn Rng + Send>)> {
