@@ -28,8 +28,8 @@ undocumented_unsafe_blocks = "deny"
 # URL to the sibling checkout, so local edits are visible without a push.
 rusty_esp_core = { version = "0.1", default-features = false }
 rusty_esp_image-core = { version = "0.1", default-features = false }
-rusty_esp_video-core = { version = "0.1.4", default-features = false }
-rusty_esp_video-esp = { version = "0.1.4", default-features = false }
+rusty_esp_video-core = { version = "0.1.6", default-features = false }
+rusty_esp_video-esp = { version = "0.1.6", default-features = false }
 rusty_esp_audio-core = { version = "0.1", default-features = false }
 # identity::begin (the device key and its DID) and, behind `mesh`, the node.
 rusty_esp_mid-core = { version = "0.1.4", default-features = false }

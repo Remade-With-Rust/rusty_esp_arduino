@@ -9,14 +9,14 @@
 //! configured by default: a sketch that never calls `listen` opens no socket.
 
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use rusty_esp_core::error::{Error as CoreError, Result as CoreResult};
 use rusty_esp_core::media::{Codec, MediaPacket};
 use rusty_esp_video_core::source::PacketSource;
-use rusty_esp_video_esp::net::{MjpegHttpServer, ServeStats, StatusHandler};
+use rusty_esp_video_esp::net::{Accepted, MjpegHttpServer, ServeStats, StatusHandler, StreamConn};
 use rusty_esp_video_esp::udp_net::{RawUdpSender, RtpJpegSender, TxStats};
 
 use crate::board::{Jpeg, Pcm};
@@ -245,27 +245,54 @@ fn listen_inner(port: u16, token: Option<String>) -> Result<()> {
     let addr = server.local_addr()?;
     let slot = Arc::new(Slot::default());
     let stats = Arc::new(Mutex::new(HttpStats::default()));
-    let (thread_slot, thread_stats) = (Arc::clone(&slot), Arc::clone(&stats));
+
+    // Streams play on a thread of their own, one at a time as they always
+    // did; the accepting thread answers everything else. Until 2026-10-18
+    // one thread did both, and a viewer with the page open held up
+    // `/v1/status` until the tab closed -- long enough for a hub polling it
+    // to call the camera offline (Apollo, on the XIAO).
+    let (streams, queued) = mpsc::channel::<StreamConn>();
+    let (worker_slot, worker_stats) = (Arc::clone(&slot), Arc::clone(&stats));
+    thread::Builder::new()
+        .name(format!("mjpeg-{port}-stream"))
+        .stack_size(SERVER_STACK)
+        .spawn(move || {
+            let mut scratch = vec![0u8; MAX_JPEG];
+            for conn in queued {
+                let mut source = SlotSource {
+                    slot: Arc::clone(&worker_slot),
+                    last: 0,
+                };
+                let mut played = ServeStats::default();
+                // A viewer leaving is not an error, and the slot source has
+                // none to return.
+                let _ = conn.run(&mut source, &mut scratch, &mut played);
+                let mut s = worker_stats.lock().unwrap_or_else(PoisonError::into_inner);
+                s.streams += played.streams;
+                s.frames += played.frames;
+            }
+        })?;
+
+    let accept_stats = Arc::clone(&stats);
     thread::Builder::new()
         .name(format!("mjpeg-{port}"))
         .stack_size(stack)
         .spawn(move || {
-            let mut scratch = vec![0u8; MAX_JPEG];
-            let mut served = ServeStats::default();
+            let mut counted = ServeStats::default();
             loop {
-                let mut source = SlotSource {
-                    slot: Arc::clone(&thread_slot),
-                    last: 0,
-                };
-                // A client disconnect is not an error; a source error would
-                // be, and the slot source has none — so this loops forever.
-                let _ = server.serve_one(&mut source, &mut scratch, &mut served);
-                *thread_stats.lock().unwrap_or_else(PoisonError::into_inner) = HttpStats {
-                    connections: served.connections,
-                    streams: served.streams,
-                    frames: served.frames,
-                    other: served.other,
-                };
+                match server.accept_one(&mut counted) {
+                    // the worker outlives this thread; a failed send means
+                    // the program is ending
+                    Ok(Accepted::Stream(conn)) => {
+                        let _ = streams.send(conn);
+                    }
+                    Ok(Accepted::Answered(_)) => {}
+                    // the listener refused an accept: do not spin on it
+                    Err(_) => thread::sleep(Duration::from_millis(50)),
+                }
+                let mut s = accept_stats.lock().unwrap_or_else(PoisonError::into_inner);
+                s.connections = counted.connections;
+                s.other = counted.other;
             }
         })?;
     state().server = Some(Server {
