@@ -37,6 +37,21 @@ pub const SSRC: u32 = 0x4A41_4E55; // "JANU"
 /// on the board — every request after such a viewer queued unanswered.
 pub const STREAM_STALL: Duration = Duration::from_secs(5);
 
+/// The HTTP server thread's stack. ESP-IDF's default pthread stack is a few
+/// KB; the server parses request heads and writes frames from this thread.
+const SERVER_STACK: usize = 24 * 1024;
+
+/// What a status handler adds to it: the handler signs (P-256) and builds
+/// JSON on the server's thread. Measured by painting the stack (x86_64,
+/// 2026-10-18): 5.7 KiB optimised, 21.4 KiB unoptimised, which overflowed
+/// the 24 KiB thread on Linux CI. Windows rounds a thread's stack up to
+/// 64 KiB and had hidden it.
+const STATUS_STACK: usize = if cfg!(debug_assertions) {
+    48 * 1024
+} else {
+    16 * 1024
+};
+
 /// What the HTTP server has served.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct HttpStats {
@@ -221,8 +236,11 @@ fn listen_inner(port: u16, token: Option<String>) -> Result<()> {
     if let Some(t) = &token {
         server = server.gated(t.clone());
     }
-    if let Some(handler) = state().status.clone() {
+    let status = state().status.clone();
+    let mut stack = SERVER_STACK;
+    if let Some(handler) = status {
         server = server.with_status(handler);
+        stack += STATUS_STACK;
     }
     let addr = server.local_addr()?;
     let slot = Arc::new(Slot::default());
@@ -230,10 +248,7 @@ fn listen_inner(port: u16, token: Option<String>) -> Result<()> {
     let (thread_slot, thread_stats) = (Arc::clone(&slot), Arc::clone(&stats));
     thread::Builder::new()
         .name(format!("mjpeg-{port}"))
-        // ESP-IDF's default pthread stack is a few KB; the server parses
-        // request heads and writes frames from this thread. Harmless on a
-        // laptop.
-        .stack_size(24 * 1024)
+        .stack_size(stack)
         .spawn(move || {
             let mut scratch = vec![0u8; MAX_JPEG];
             let mut served = ServeStats::default();
