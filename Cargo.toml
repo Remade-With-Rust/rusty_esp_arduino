@@ -28,11 +28,11 @@ undocumented_unsafe_blocks = "deny"
 # URL to the sibling checkout, so local edits are visible without a push.
 rusty_esp_core = { version = "0.1", default-features = false }
 rusty_esp_image-core = { version = "0.1", default-features = false }
-rusty_esp_video-core = { version = "0.1", default-features = false }
-rusty_esp_video-esp = { version = "0.1", default-features = false }
+rusty_esp_video-core = { version = "0.1.4", default-features = false }
+rusty_esp_video-esp = { version = "0.1.4", default-features = false }
 rusty_esp_audio-core = { version = "0.1", default-features = false }
 # identity::begin (the device key and its DID) and, behind `mesh`, the node.
-rusty_esp_mid-core = { version = "0.1", default-features = false }
+rusty_esp_mid-core = { version = "0.1.4", default-features = false }
 # radar::read (the one presence record every presence sensor answers in).
 # 0.2: `rusty_esp_signal-esp` dropped `EspNowLink`'s lifetime when
 # esp-radio beta.1 removed it from the ESP-NOW halves. A breaking change
