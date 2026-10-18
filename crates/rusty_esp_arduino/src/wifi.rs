@@ -29,13 +29,19 @@ pub fn host(ssid: &str, psk: &str) -> bool {
     error::ok(board::with(|b| b.wifi_host(ssid, psk)))
 }
 
-/// The interface address, once joined or once hosting.
+/// The interface address, once joined or once hosting: `None` until the
+/// network has given one. A board reports `0.0.0.0` for an interface that
+/// is up without an address (a join that timed out while the driver keeps
+/// trying), and that is no address to print or to call connected.
 #[must_use]
 pub fn local_ip() -> Option<IpAddr> {
-    board::with(|b| Ok(b.local_ip())).unwrap_or(None)
+    board::with(|b| Ok(b.local_ip()))
+        .unwrap_or(None)
+        .filter(|ip| !ip.is_unspecified())
 }
 
-/// Whether [`begin`] or [`host`] has succeeded.
+/// Whether [`begin`] or [`host`] has succeeded and the network has given
+/// an address.
 #[must_use]
 pub fn connected() -> bool {
     local_ip().is_some()
