@@ -16,7 +16,7 @@ use std::time::Duration;
 use rusty_esp_core::error::{Error as CoreError, Result as CoreResult};
 use rusty_esp_core::media::{Codec, MediaPacket};
 use rusty_esp_video_core::source::PacketSource;
-use rusty_esp_video_esp::net::{MjpegHttpServer, ServeStats};
+use rusty_esp_video_esp::net::{MjpegHttpServer, ServeStats, StatusHandler};
 use rusty_esp_video_esp::udp_net::{RawUdpSender, RtpJpegSender, TxStats};
 
 use crate::board::{Jpeg, Pcm};
@@ -137,6 +137,8 @@ struct State {
     server: Option<Server>,
     rtp: Option<RtpJpegSender>,
     pcm: Option<RawUdpSender>,
+    /// What `/v1/status` serves, for the next `listen`.
+    status: Option<StatusHandler>,
     jpeg_pushed: u64,
     pcm_pushed: u64,
 }
@@ -145,6 +147,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     server: None,
     rtp: None,
     pcm: None,
+    status: None,
     jpeg_pushed: 0,
     pcm_pushed: 0,
 });
@@ -179,6 +182,16 @@ pub fn listen_gated(port: u16) -> bool {
     )
 }
 
+/// Serve `GET /v1/status` from `handler` on the server the next [`listen`]
+/// or [`listen_gated`] starts, ungated (a home's hub has no page token):
+/// `handler` gets `None` for the plain status and the verifier's 32-byte
+/// nonce for `?nonce=<64 lowercase hex>`, and returns the JSON body. Any
+/// other query is a `400`; without a handler the path is a `404`. So this
+/// comes before `listen`.
+pub fn on_status(handler: impl Fn(Option<[u8; 32]>) -> String + Send + Sync + 'static) {
+    state().status = Some(Arc::new(handler));
+}
+
 /// The token the running server requires, if it is gated.
 #[must_use]
 pub fn token() -> Option<String> {
@@ -207,6 +220,9 @@ fn listen_inner(port: u16, token: Option<String>) -> Result<()> {
     let mut server = MjpegHttpServer::bind(("0.0.0.0", port))?;
     if let Some(t) = &token {
         server = server.gated(t.clone());
+    }
+    if let Some(handler) = state().status.clone() {
+        server = server.with_status(handler);
     }
     let addr = server.local_addr()?;
     let slot = Arc::new(Slot::default());

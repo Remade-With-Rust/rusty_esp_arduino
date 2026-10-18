@@ -11,6 +11,7 @@ use std::sync::{Mutex, PoisonError};
 use rusty_esp_core::hal::{Kv, Rng};
 use rusty_esp_mid_core::did::{Did, MAX_DID_LEN};
 use rusty_esp_mid_core::key::DeviceKey;
+use rusty_esp_mid_core::signer::DeviceSigner;
 
 use crate::board;
 use crate::error::{Error, Result, record};
@@ -79,6 +80,9 @@ struct State {
     maker: Option<String>,
     /// The page's viewing token, base58.
     page_token: String,
+    /// The device key, for the signatures the device makes about itself
+    /// (`/v1/status`). Held from `begin`, so it outlives the store's handover.
+    key: DeviceKey,
     /// The store and entropy `begin` took from the board, until the mesh
     /// takes them (the node owns the store; the key in it is the same).
     #[cfg_attr(not(feature = "mesh"), allow(dead_code))]
@@ -113,6 +117,7 @@ fn try_begin(maker: Option<&str>) -> Result<String> {
         did: did.clone(),
         maker: maker.map(str::to_owned),
         page_token,
+        key,
         store: Some((kv.0, rng.0)),
     });
     Ok(did)
@@ -168,6 +173,18 @@ pub fn maker() -> Option<String> {
 #[must_use]
 pub fn begun() -> bool {
     did().is_some()
+}
+
+/// The device key's signature over `prehash` (P-256, low-s, 64-byte
+/// `r || s`): what [`rusty_esp_mid_core::status::StatusDocument::signed`]
+/// takes. `None` before `begin`.
+#[must_use]
+pub fn sign_prehash(prehash: &[u8; 32]) -> Option<[u8; 64]> {
+    IDENTITY
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .map(|s| s.key.sign_prehash(prehash))
 }
 
 /// Run `f` with the device's identity store and its DID while `begin`'s
