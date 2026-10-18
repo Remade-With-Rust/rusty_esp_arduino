@@ -84,5 +84,31 @@ fn the_status_is_served_ungated_and_its_signature_is_the_devices() {
     assert!(get(&target, "/v1/status?nonce=abc").starts_with("HTTP/1.1 400"));
     // the page is still gated
     assert!(get(&target, "/").starts_with("HTTP/1.1 403"));
+
+    // a viewer with the page open: the stream's head arrives and the socket
+    // stays open, and the status and the page still answer at once (a hub
+    // polls with a short timeout and calls a silent device offline)
+    let token = identity::page_token().unwrap();
+    let mut viewer = TcpStream::connect(&target).unwrap();
+    write!(
+        viewer,
+        "GET /stream?t={token} HTTP/1.1\r\nHost: cam\r\n\r\n"
+    )
+    .unwrap();
+    viewer
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut head = [0u8; 256];
+    let n = viewer.read(&mut head).unwrap();
+    assert!(head[..n].starts_with(b"HTTP/1.1 200"), "the stream is live");
+    let started = std::time::Instant::now();
+    assert!(get(&target, "/v1/status").starts_with("HTTP/1.1 200"));
+    assert!(get(&target, "/").starts_with("HTTP/1.1 403"));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "answered beside the open stream: {:?}",
+        started.elapsed()
+    );
+    drop(viewer);
     let _ = std::fs::remove_dir_all(&dir);
 }
