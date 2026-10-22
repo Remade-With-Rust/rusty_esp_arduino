@@ -7,16 +7,22 @@
 //! anyone, by name. `push_jpeg` hands the latest frame to every open stream. `rtp_to(dest)` and `pcm_to(dest)` add the two
 //! UDP senders; `push_jpeg` and `push_pcm` then also send. Nothing is
 //! configured by default: a sketch that never calls `listen` opens no socket.
+//! A board with no camera that a home's hub still has to find calls
+//! `listen_status(port)`: `/v1/status` alone.
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::io::Read;
+use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use rusty_esp_core::error::{Error as CoreError, Result as CoreResult};
 use rusty_esp_core::media::{Codec, MediaPacket};
+use rusty_esp_video_core::http::{self, Path, Request, StatusQuery};
 use rusty_esp_video_core::source::PacketSource;
-use rusty_esp_video_esp::net::{Accepted, MjpegHttpServer, ServeStats, StatusHandler, StreamConn};
+use rusty_esp_video_esp::net::{
+    Accepted, MAX_REQUEST_BYTES, MjpegHttpServer, ServeStats, StatusHandler, StreamConn, TcpSink,
+};
 use rusty_esp_video_esp::udp_net::{RawUdpSender, RtpJpegSender, TxStats};
 
 use crate::board::{Jpeg, Pcm};
@@ -51,6 +57,11 @@ const STATUS_STACK: usize = if cfg!(debug_assertions) {
 } else {
     16 * 1024
 };
+
+/// How long [`listen_status`] waits for a request head before it gives the
+/// connection up: one thread answers every hub, so a client that connects
+/// and says nothing must not hold the next one for long.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// What the HTTP server has served.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -302,6 +313,86 @@ fn listen_inner(port: u16, token: Option<String>) -> Result<()> {
         token,
     });
     Ok(())
+}
+
+/// Serve `GET /v1/status` alone at `port` (0 picks one; see
+/// [`listen_addr`]), from the handler [`on_status`] set: a board with no
+/// camera that a home's hub still has to find, check and adopt. Every other
+/// path is a `404` and every other method a `405`; there is no page and no
+/// token. So [`on_status`] comes first, and without it this is `false` and
+/// [`crate::last_error`] says so. One server per program, as with
+/// [`listen`].
+pub fn listen_status(port: u16) -> bool {
+    error::ok(listen_status_inner(port))
+}
+
+fn listen_status_inner(port: u16) -> Result<()> {
+    let handler = state().status.clone().ok_or(Error::Missing(
+        "a status to serve: on_status comes before listen_status",
+    ))?;
+    let listener = TcpListener::bind(("0.0.0.0", port))?;
+    let addr = listener.local_addr()?;
+    let stats = Arc::new(Mutex::new(HttpStats::default()));
+    let counted = Arc::clone(&stats);
+    thread::Builder::new()
+        .name(format!("status-{port}"))
+        .stack_size(SERVER_STACK + STATUS_STACK)
+        .spawn(move || {
+            loop {
+                let Ok((conn, _)) = listener.accept() else {
+                    // the listener refused an accept: do not spin on it
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                };
+                answer_status(conn, &handler);
+                let mut s = counted.lock().unwrap_or_else(PoisonError::into_inner);
+                s.connections += 1;
+                s.other += 1;
+            }
+        })?;
+    state().server = Some(Server {
+        addr,
+        slot: Arc::default(),
+        stats,
+        token: None,
+    });
+    Ok(())
+}
+
+/// One request on a status-only server, answered and closed.
+fn answer_status(conn: TcpStream, handler: &StatusHandler) {
+    let _ = conn.set_nodelay(true);
+    let _ = conn.set_read_timeout(Some(REQUEST_TIMEOUT));
+    let mut sink = TcpSink(conn);
+    let mut head = [0u8; MAX_REQUEST_BYTES];
+    let mut n = 0;
+    while n < head.len() && !http::head_complete(&head[..n]) {
+        match sink.0.read(&mut head[n..]) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+    }
+    let _ = match http::parse_request(&head[..n], None) {
+        None => http::write_status(&mut sink, http::Status::BadRequest),
+        Some(Request::Get {
+            path: Path::Status(StatusQuery::Invalid),
+            ..
+        }) => http::write_status(&mut sink, http::Status::BadRequest),
+        Some(Request::Get {
+            path: Path::Status(query),
+            ..
+        }) => {
+            let nonce = match query {
+                StatusQuery::Nonce(n) => Some(n),
+                _ => None,
+            };
+            http::write_json(&mut sink, 200, handler(nonce).as_bytes())
+        }
+        Some(Request::Get { .. }) => http::write_status(&mut sink, http::Status::NotFound),
+        Some(Request::Put { .. } | Request::Post { .. } | Request::Other) => {
+            http::write_status(&mut sink, http::Status::MethodNotAllowed)
+        }
+    };
 }
 
 /// Where [`listen`] is serving, once it is.
